@@ -50,7 +50,98 @@ void main() {
     );
   });
 
-  test('connection test sends a lightweight image request', () async {
+  test('connection test sends a lightweight Responses image request for latest OpenAI models',
+      () async {
+    server.listen((request) async {
+      expect(request.method, 'POST');
+      expect(request.uri.path, '/v1/responses');
+      final payload = jsonDecode(await utf8.decoder.bind(request).join())
+          as Map<String, dynamic>;
+      final input = payload['input'] as List<dynamic>;
+      final content =
+          (input.single as Map<String, dynamic>)['content'] as List<dynamic>;
+      final imagePart = content
+          .cast<Map<dynamic, dynamic>>()
+          .singleWhere((part) => part['type'] == 'input_image');
+
+      final imageUrl = imagePart['image_url'] as String;
+      expect(imageUrl, startsWith('data:image/png;base64,'));
+      expect(imagePart['detail'], 'low');
+      _expectValidPng(base64Decode(imageUrl.split(',').last));
+      expect(payload['max_output_tokens'], 64);
+      expect(payload.containsKey('max_tokens'), isFalse);
+      expect(payload.containsKey('temperature'), isFalse);
+
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode(<String, dynamic>{
+        'id': 'resp_probe_1',
+        'status': 'completed',
+        'output': <Map<String, dynamic>>[
+          <String, dynamic>{
+            'type': 'message',
+            'role': 'assistant',
+            'content': <Map<String, dynamic>>[
+              <String, dynamic>{'type': 'output_text', 'text': 'OK'},
+            ],
+          },
+        ],
+      }));
+      await request.response.close();
+    });
+
+    await service.testConnection(config);
+  });
+
+  test('connection test falls back to modern Chat Completions when /responses returns 404',
+      () async {
+    final paths = <String>[];
+    server.listen((request) async {
+      paths.add(request.uri.path);
+      final payload = jsonDecode(await utf8.decoder.bind(request).join())
+          as Map<String, dynamic>;
+
+      if (request.uri.path == '/v1/responses') {
+        request.response.statusCode = 404;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode(<String, dynamic>{
+          'error': <String, String>{'message': '404 page not found'},
+        }));
+        await request.response.close();
+        return;
+      }
+
+      expect(request.uri.path, '/v1/chat/completions');
+      final messages = payload['messages'] as List<dynamic>;
+      final content =
+          (messages.single as Map<String, dynamic>)['content'] as List<dynamic>;
+      final imagePart = content
+          .cast<Map<dynamic, dynamic>>()
+          .singleWhere((part) => part['type'] == 'image_url');
+      final imageUrl =
+          (imagePart['image_url'] as Map<dynamic, dynamic>)['url'] as String;
+      expect(imageUrl, startsWith('data:image/png;base64,'));
+      _expectValidPng(base64Decode(imageUrl.split(',').last));
+      expect(payload['max_completion_tokens'], 64);
+      expect(payload.containsKey('max_tokens'), isFalse);
+      expect(payload.containsKey('temperature'), isFalse);
+
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode(<String, dynamic>{
+        'choices': <Map<String, dynamic>>[
+          <String, dynamic>{
+            'message': <String, String>{'content': 'OK'},
+          },
+        ],
+      }));
+      await request.response.close();
+    });
+
+    await service.testConnection(config);
+    expect(paths, <String>['/v1/responses', '/v1/chat/completions']);
+  });
+
+  test('connection test sends Chat Completions image probe for legacy third-party models',
+      () async {
     server.listen((request) async {
       expect(request.method, 'POST');
       expect(request.uri.path, '/v1/chat/completions');
@@ -67,7 +158,7 @@ void main() {
           (imagePart['image_url'] as Map<dynamic, dynamic>)['url'] as String;
       expect(imageUrl, startsWith('data:image/png;base64,'));
       _expectValidPng(base64Decode(imageUrl.split(',').last));
-      expect(payload['max_tokens'], 8);
+      expect(payload['max_tokens'], 16);
 
       request.response.headers.contentType = ContentType.json;
       request.response.write(jsonEncode(<String, dynamic>{
@@ -80,7 +171,7 @@ void main() {
       await request.response.close();
     });
 
-    await service.testConnection(config);
+    await service.testConnection(config.copyWith(model: 'gpt-4o'));
   });
 }
 

@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
+import 'package:smart_wrong_notebook/src/data/remote/ai/openai_api_protocol.dart';
 import 'package:smart_wrong_notebook/src/data/repositories/settings_repository.dart';
 import 'package:smart_wrong_notebook/src/domain/models/ai_provider_config.dart';
 import 'package:smart_wrong_notebook/src/domain/models/analysis_result.dart';
@@ -186,6 +187,7 @@ class AiAnalysisService {
   AiAnalysisService({required this.settingsRepository});
 
   final SettingsRepository settingsRepository;
+  final OpenAiApiProtocol _openAiProtocol = OpenAiApiProtocol();
 
   static const _maxRetries = 2; // 最多重试2次（总共3次请求）
   static const _baseDelayMs = 1000; // 基础延迟1秒
@@ -197,11 +199,12 @@ class AiAnalysisService {
     Dio dio,
     String path, {
     required Map<String, dynamic> data,
+    Options? options,
     int attempt = 1,
     Set<int> retryStatusCodes = const <int>{},
   }) async {
     try {
-      return await dio.post<T>(path, data: data);
+      return await dio.post<T>(path, data: data, options: options);
     } on DioException catch (e) {
       final shouldRetry = _shouldRetryPost(
         e,
@@ -217,6 +220,7 @@ class AiAnalysisService {
           dio,
           path,
           data: data,
+          options: options,
           attempt: attempt + 1,
           retryStatusCodes: retryStatusCodes,
         );
@@ -227,52 +231,16 @@ class AiAnalysisService {
 
   factory AiAnalysisService.fake() => _FakeAiAnalysisService();
 
-  /// 从 Dio response 中安全提取 OpenAI 格式的 content 字段。
-  /// 代理服务偶尔返回非 application/json content-type，导致 response.data 为原始 String。
+  /// 从 Dio response 中安全提取文本内容，同时兼容 OpenAI Responses API、
+  /// Chat Completions API（含数组型 content）、两种 SSE 流与代理非 JSON 响应。
   String _extractContentFromResponse(Response response) {
-    dynamic data = response.data;
-    if (data is String) {
-      final trimmed = data.trim();
-      if (trimmed.startsWith('data:')) {
-        return _extractContentFromSse(trimmed);
-      }
-      data = jsonDecode(trimmed);
-    }
-    return (data as Map<String, dynamic>)['choices'][0]['message']['content']
-        as String;
-  }
-
-  String _extractContentFromSse(String body) {
-    final buffer = StringBuffer();
-    for (final line in const LineSplitter().convert(body)) {
-      final trimmed = line.trim();
-      if (!trimmed.startsWith('data:')) continue;
-      final payload = trimmed.substring(5).trim();
-      if (payload.isEmpty || payload == '[DONE]') continue;
-      final json = jsonDecode(payload) as Map<String, dynamic>;
-      final choices = json['choices'] as List? ?? const [];
-      if (choices.isEmpty || choices.first is! Map) continue;
-      final choice = choices.first as Map;
-      final delta = choice['delta'];
-      final message = choice['message'];
-      final content = delta is Map
-          ? delta['content']
-          : message is Map
-              ? message['content']
-              : null;
-      if (content is String) buffer.write(content);
-    }
-    final content = buffer.toString();
-    if (content.isEmpty) {
-      throw const FormatException('Empty SSE chat completion content.');
-    }
-    return content;
+    return OpenAiApiProtocol.extractTextFromResponse(response);
   }
 
   Dio _createClient(AiProviderConfig config) {
-    final baseUrl = config.effectiveBaseUrl;
+    final target = OpenAiApiProtocol.resolveEndpointTarget(config);
     return Dio(BaseOptions(
-      baseUrl: baseUrl,
+      baseUrl: target.apiBaseUrl,
       headers: <String, String>{
         'Content-Type': 'application/json',
         if (config.apiKey.isNotEmpty)
@@ -296,7 +264,8 @@ class AiAnalysisService {
       final payload = response.data is String
           ? jsonDecode(response.data as String)
           : response.data;
-      final data = payload is Map ? payload['data'] : null;
+      final data =
+          payload is List ? payload : (payload is Map ? payload['data'] : null);
       if (data is! List) {
         throw const FormatException('模型列表格式无效');
       }
@@ -329,26 +298,13 @@ class AiAnalysisService {
     debugPrint('[AiAnalysisService] baseUrl: ${config.baseUrl}');
     debugPrint('[AiAnalysisService] model: ${config.model}');
 
+    _openAiProtocol.clearCachedProfile(config);
     final dio = _createClient(config);
-    final baseUrl = config.effectiveBaseUrl.toLowerCase();
 
     try {
-      // 只检查 HTTP 200 状态码，不检查返回内容
-      if (baseUrl.contains('openrouter')) {
-        debugPrint('[AiAnalysisService] Testing OpenRouter endpoint');
-        await dio.post('/chat/completions', data: <String, dynamic>{
-          'model': config.model,
-          'messages': [
-            {
-              'role': 'user',
-              'content': _visionProbeContent(),
-            },
-          ],
-          'max_tokens': 8,
-        });
-      } else if (config.model.toLowerCase().contains('gemini')) {
-        debugPrint('[AiAnalysisService] Testing Gemini endpoint');
-        await dio.post(
+      if (OpenAiApiProtocol.isGeminiNativeEndpoint(config)) {
+        debugPrint('[AiAnalysisService] Testing Gemini native endpoint');
+        final response = await dio.post<dynamic>(
           '/v1beta/models/${config.model}:generateContent',
           data: <String, dynamic>{
             'contents': [
@@ -364,21 +320,30 @@ class AiAnalysisService {
                 ]
               },
             ],
-            'generationConfig': {'maxOutputTokens': 8},
+            'generationConfig': {'maxOutputTokens': 16},
           },
         );
+        OpenAiApiProtocol.validateProbeResponse(response);
       } else {
-        debugPrint('[AiAnalysisService] Testing default OpenAI endpoint');
-        await dio.post('/chat/completions', data: <String, dynamic>{
-          'model': config.model,
-          'messages': [
-            {
-              'role': 'user',
-              'content': _visionProbeContent(),
-            },
-          ],
-          'max_tokens': 8,
-        });
+        debugPrint(
+          '[AiAnalysisService] Testing OpenAI endpoint '
+          '(preferred=${_openAiProtocol.selectProtocol(config).name})',
+        );
+        final response = await _openAiProtocol.sendRequest(
+          dio: dio,
+          config: config,
+          prompt: '请确认你能接收图片。只回复 OK。',
+          image: OpenAiImageAttachment(
+            bytes: base64Decode(_connectionProbeImageBase64),
+            detail: 'low',
+            mimeType: 'image/png',
+          ),
+          maxTokens: 16,
+          isProbe: true,
+          postExecutor: (client, path, {required data, options}) =>
+              client.post<dynamic>(path, data: data, options: options),
+        );
+        OpenAiApiProtocol.validateProbeResponse(response);
       }
 
       debugPrint('[AiAnalysisService] Connection test passed (HTTP 200)');
@@ -388,24 +353,9 @@ class AiAnalysisService {
       throw AiAnalysisException(_dioErrorMessage(e));
     } catch (e) {
       debugPrint('[AiAnalysisService] Exception: $e');
+      if (e is AiAnalysisException) rethrow;
       throw AiAnalysisException('测试失败: $e');
     }
-  }
-
-  List<Map<String, dynamic>> _visionProbeContent() {
-    return <Map<String, dynamic>>[
-      <String, dynamic>{
-        'type': 'text',
-        'text': '请确认你能接收图片。只回复 OK。',
-      },
-      <String, dynamic>{
-        'type': 'image_url',
-        'image_url': <String, String>{
-          'url': 'data:image/png;base64,$_connectionProbeImageBase64',
-          'detail': 'low',
-        },
-      },
-    ];
   }
 
   /// 分析题目 - 图形题先直接读图解题，其他带图题保持先提取结构再分析。
@@ -1700,16 +1650,13 @@ class AiAnalysisService {
       final body = e.response!.data;
       if (status != null) {
         buffer.write(' (HTTP $status)');
-        if (body != null && body is Map && body['error'] != null) {
-          final errMsg = body['error'];
-          if (errMsg is Map) {
-            buffer.write(': ${errMsg['message'] ?? errMsg}');
-          } else {
-            buffer.write(': $errMsg');
-          }
+        final extractedError =
+            OpenAiApiProtocol.extractErrorMessageFromBody(body);
+        if (extractedError != null && extractedError.isNotEmpty) {
+          buffer.write(': $extractedError');
         } else if (body is String && body.isNotEmpty) {
           buffer.write(
-              ': ${body.length > 100 ? '${body.substring(0, 100)}...' : body}');
+              ': ${body.length > 160 ? '${body.substring(0, 160)}...' : body}');
         }
       } else if (e.message != null) {
         buffer.write(': ${e.message}');
@@ -1991,28 +1938,18 @@ class AiAnalysisService {
     double temperature = 0.7,
   }) async {
     final dio = _createClient(config);
-    final response =
-        await _retryPost(dio, '/chat/completions', data: <String, dynamic>{
-      'model': config.model,
-      'messages': <Map<String, String>>[
-        <String, String>{'role': 'system', 'content': systemPrompt},
-        <String, String>{'role': 'user', 'content': prompt},
-      ],
-      'temperature': temperature,
-      'max_tokens': maxTokens,
-    });
+    final response = await _openAiProtocol.sendRequest(
+      dio: dio,
+      config: config,
+      systemPrompt: systemPrompt,
+      prompt: prompt,
+      maxTokens: maxTokens,
+      temperature: temperature,
+      postExecutor: (client, path, {required data, options}) =>
+          _retryPost<dynamic>(client, path, data: data, options: options),
+    );
 
     return _extractContentFromResponse(response);
-  }
-
-  bool _usesOpenAiCompatibleChat(AiProviderConfig config) {
-    final baseUrl = config.baseUrl.toLowerCase();
-    final model = config.model.toLowerCase();
-    return baseUrl.contains('/v1') ||
-        baseUrl.contains('openrouter') ||
-        model.contains('gpt') ||
-        model.contains('4o') ||
-        model.contains('4-turbo');
   }
 
   Future<String> _requestAiContentWithImage({
@@ -2025,39 +1962,11 @@ class AiAnalysisService {
     double temperature = 0.7,
   }) async {
     final dio = _createClient(config);
-    final base64Image = base64Encode(imageBytes);
-    const mimeType = 'image/jpeg';
-    final baseUrl = config.baseUrl.toLowerCase();
-    final model = config.model.toLowerCase();
+    final mimeType = OpenAiApiProtocol.detectImageMimeType(imageBytes);
 
-    if (_usesOpenAiCompatibleChat(config)) {
-      final response =
-          await _retryPost(dio, '/chat/completions', data: <String, dynamic>{
-        'model': config.model,
-        'messages': <Map<String, dynamic>>[
-          {'role': 'system', 'content': systemPrompt},
-          {
-            'role': 'user',
-            'content': [
-              {
-                'type': 'image_url',
-                'image_url': {
-                  'url': 'data:$mimeType;base64,$base64Image',
-                  'detail': imageDetail
-                },
-              },
-              {'type': 'text', 'text': prompt},
-            ],
-          },
-        ],
-        'temperature': temperature,
-        'max_tokens': maxTokens,
-      });
-      return _extractContentFromResponse(response);
-    }
-
-    if (model.contains('gemini') && !baseUrl.contains('openrouter')) {
-      final response = await dio.post(
+    if (OpenAiApiProtocol.isGeminiNativeEndpoint(config)) {
+      final base64Image = base64Encode(imageBytes);
+      final response = await dio.post<dynamic>(
         '/v1beta/models/${config.model}:generateContent',
         data: <String, dynamic>{
           'contents': [
@@ -2076,33 +1985,25 @@ class AiAnalysisService {
           },
         },
       );
-      return response.data['candidates'][0]['content']['parts'][0]['text']
-          as String;
+      return _extractContentFromResponse(response);
     }
 
-    final response =
-        await _retryPost(dio, '/chat/completions', data: <String, dynamic>{
-      'model': config.model,
-      'messages': <Map<String, dynamic>>[
-        {'role': 'system', 'content': systemPrompt},
-        {
-          'role': 'user',
-          'content': [
-            {
-              'type': 'image_url',
-              'image_url': {
-                'url': 'data:$mimeType;base64,$base64Image',
-                'detail': imageDetail
-              },
-            },
-            {'type': 'text', 'text': prompt},
-          ],
-        },
-      ],
-      'temperature': temperature,
-      'max_tokens': maxTokens,
-    });
-    return response.data['choices'][0]['message']['content'] as String;
+    final response = await _openAiProtocol.sendRequest(
+      dio: dio,
+      config: config,
+      systemPrompt: systemPrompt,
+      prompt: prompt,
+      image: OpenAiImageAttachment(
+        bytes: imageBytes,
+        detail: imageDetail,
+        mimeType: mimeType,
+      ),
+      maxTokens: maxTokens,
+      temperature: temperature,
+      postExecutor: (client, path, {required data, options}) =>
+          _retryPost<dynamic>(client, path, data: data, options: options),
+    );
+    return _extractContentFromResponse(response);
   }
 
   static const _defaultAnalysisSystemPrompt = r'''你是一个专业的错题分析助手，专门帮助学生分析和理解错题。
@@ -4439,27 +4340,17 @@ class AiAnalysisService {
       return userAnswer == correctAnswer;
     }
 
-    final dio = _createClient(config);
     final prompt =
         _buildJudgePrompt(question, userAnswer, correctAnswer, options);
 
     try {
-      final response =
-          await _retryPost(dio, '/chat/completions', data: <String, dynamic>{
-        'model': config.model,
-        'messages': <Map<String, String>>[
-          <String, String>{
-            'role': 'system',
-            'content': '你是一个判断答案是否正确的助手。请仔细分析题目和答案，给出判断结果。'
-          },
-          <String, String>{'role': 'user', 'content': prompt},
-        ],
-        'temperature': 0.1,
-        'max_tokens': 50,
-      });
-
-      final content =
-          response.data['choices'][0]['message']['content'] as String;
+      final content = await _requestAiContent(
+        config: config,
+        systemPrompt: '你是一个判断答案是否正确的助手。请仔细分析题目和答案，给出判断结果。',
+        prompt: prompt,
+        maxTokens: 50,
+        temperature: 0.1,
+      );
       debugPrint('[AiAnalysisService] judgeAnswer response: $content');
 
       // 解析 AI 判断结果
