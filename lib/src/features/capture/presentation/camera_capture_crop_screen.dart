@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/cupertino.dart';
@@ -14,8 +15,60 @@ import 'package:smart_wrong_notebook/src/features/capture/application/auto_quest
 import 'package:smart_wrong_notebook/src/features/capture/application/camera_capture_session.dart';
 import 'package:smart_wrong_notebook/src/features/capture/application/free_crop_geometry.dart';
 import 'package:smart_wrong_notebook/src/features/capture/application/image_crop_processor.dart';
+import 'package:smart_wrong_notebook/src/features/capture/presentation/widgets/crop_angle_control.dart';
 import 'package:smart_wrong_notebook/src/features/capture/presentation/widgets/free_crop_canvas.dart';
 import 'package:uuid/uuid.dart';
+
+/// Checks AI service configuration and navigates straight into the integrated
+/// camera + free-crop screen, skipping any intermediate camera/gallery modal.
+Future<void> openCameraCaptureFlow(BuildContext context, WidgetRef ref) async {
+  final router = GoRouter.maybeOf(context);
+  final messenger = ScaffoldMessenger.maybeOf(context);
+  final hasScaffold = Scaffold.maybeOf(context) != null;
+
+  final config =
+      await ref.read(settingsRepositoryProvider).getAiProviderConfig();
+  if (!context.mounted) return;
+  if (config == null ||
+      config.baseUrl.isEmpty ||
+      config.apiKey.isEmpty ||
+      config.model.isEmpty) {
+    if (hasScaffold) {
+      messenger?.hideCurrentSnackBar();
+      messenger?.showSnackBar(
+        SnackBar(
+          content: const Text('请先在设置中配置 AI 服务'),
+          action: router == null
+              ? null
+              : SnackBarAction(
+                  label: '去设置',
+                  onPressed: () => router.go('/settings/provider'),
+                ),
+        ),
+      );
+    }
+    return;
+  }
+
+  router?.go('/capture/camera');
+}
+
+/// Computes the centered single-question framing guide rectangle inside the
+/// live viewfinder: 100% viewport width with an approximate 4:1 aspect ratio.
+Rect computeViewfinderGuideRect(Size viewportSize) {
+  if (viewportSize.width <= 0 || viewportSize.height <= 0) {
+    return Rect.zero;
+  }
+  final width = viewportSize.width;
+  final height = (width / 4.0)
+      .clamp(
+        math.min(56.0, viewportSize.height * 0.5),
+        viewportSize.height * 0.55,
+      )
+      .toDouble();
+  final top = (viewportSize.height - height) / 2.0;
+  return Rect.fromLTWH(0, top, width, height);
+}
 
 enum _CaptureStage {
   initializing,
@@ -60,6 +113,8 @@ class _CameraCaptureCropScreenState
   ui.Image? _capturedImage;
   Rect _cropRect = fullNormalizedCropRect;
   int _quarterTurns = 0;
+  double _fineRotationDegrees = 0.0;
+  bool _adjustingAngle = false;
 
   late final AnimationController _cropAnimController;
   Animation<Rect?>? _cropRectAnimation;
@@ -235,6 +290,8 @@ class _CameraCaptureCropScreenState
       _capturedImage = decoded;
       _cropRect = fullNormalizedCropRect;
       _quarterTurns = 0;
+      _fineRotationDegrees = 0.0;
+      _adjustingAngle = false;
       _userAdjustedCrop = false;
       _autoDetectedApplied = false;
       _autoDetecting = true;
@@ -249,6 +306,7 @@ class _CameraCaptureCropScreenState
       _runAutoDetectCenterQuestion(
         image: decoded,
         quarterTurns: 0,
+        fineRotationDegrees: 0.0,
         forceApply: false,
       ),
     );
@@ -257,6 +315,7 @@ class _CameraCaptureCropScreenState
   Future<void> _runAutoDetectCenterQuestion({
     required ui.Image image,
     required int quarterTurns,
+    required double fineRotationDegrees,
     required bool forceApply,
   }) async {
     final epoch = ++_cropSessionEpoch;
@@ -269,6 +328,7 @@ class _CameraCaptureCropScreenState
       detected = await detectCenterQuestionCropRect(
         sourceImage: image,
         quarterTurns: quarterTurns,
+        fineRotationDegrees: fineRotationDegrees,
       );
     } catch (e) {
       debugPrint('[CameraCaptureCropScreen] Auto crop detection failed: $e');
@@ -315,6 +375,7 @@ class _CameraCaptureCropScreenState
     await _runAutoDetectCenterQuestion(
       image: image,
       quarterTurns: _quarterTurns,
+      fineRotationDegrees: _fineRotationDegrees,
       forceApply: true,
     );
   }
@@ -339,6 +400,8 @@ class _CameraCaptureCropScreenState
       setState(() {
         _cropRect = fullNormalizedCropRect;
         _quarterTurns = 0;
+        _fineRotationDegrees = 0.0;
+        _adjustingAngle = false;
         _autoDetecting = false;
         _autoDetectedApplied = false;
         _userAdjustedCrop = false;
@@ -358,21 +421,21 @@ class _CameraCaptureCropScreenState
   }
 
   Future<void> _handleTapToFocus(
-    TapDownDetails details,
-    Size viewportSize,
-  ) async {
+    TapDownDetails details, {
+    required Rect previewRect,
+  }) async {
     final session = _session;
     if (session == null ||
         !session.isInitialized ||
-        viewportSize.width <= 0 ||
-        viewportSize.height <= 0) {
+        previewRect.width <= 0 ||
+        previewRect.height <= 0) {
       return;
     }
 
     final local = details.localPosition;
     final normalized = Offset(
-      (local.dx / viewportSize.width).clamp(0.0, 1.0),
-      (local.dy / viewportSize.height).clamp(0.0, 1.0),
+      ((local.dx - previewRect.left) / previewRect.width).clamp(0.0, 1.0),
+      ((local.dy - previewRect.top) / previewRect.height).clamp(0.0, 1.0),
     );
     setState(() => _focusIndicatorPosition = local);
     _focusIndicatorTimer?.cancel();
@@ -453,7 +516,20 @@ class _CameraCaptureCropScreenState
       _autoDetectedApplied = false;
       _userAdjustedCrop = true;
       _quarterTurns = 0;
+      _fineRotationDegrees = 0.0;
+      _adjustingAngle = false;
       _cropRect = fullNormalizedCropRect;
+    });
+  }
+
+  void _setFineRotation(double degrees) {
+    if (_capturedImage == null || _saving) return;
+    _cropSessionEpoch++;
+    _cancelCropAnimation();
+    setState(() {
+      _autoDetecting = false;
+      _userAdjustedCrop = true;
+      _fineRotationDegrees = degrees;
     });
   }
 
@@ -474,6 +550,7 @@ class _CameraCaptureCropScreenState
     _cancelCropAnimation();
     setState(() {
       _autoDetecting = false;
+      _adjustingAngle = false;
       _saving = true;
     });
     File? croppedTempFile;
@@ -482,7 +559,9 @@ class _CameraCaptureCropScreenState
       final String savedPath;
 
       final useOriginal = forceOriginal ||
-          (_quarterTurns == 0 && isEffectivelyFullCrop(_cropRect));
+          (_quarterTurns == 0 &&
+              _fineRotationDegrees.abs() < 0.05 &&
+              isEffectivelyFullCrop(_cropRect));
       if (useOriginal) {
         savedPath = _capturedFileOwnedTemp
             ? await storage.saveImage(file)
@@ -491,6 +570,7 @@ class _CameraCaptureCropScreenState
         final jpgBytes = await cropAndEncodeJpg(
           sourceImage: image,
           quarterTurns: _quarterTurns,
+          fineRotationDegrees: _fineRotationDegrees,
           normalizedCropRect: _cropRect,
         );
         if (!mounted) return;
@@ -543,6 +623,7 @@ class _CameraCaptureCropScreenState
     return Scaffold(
       backgroundColor: surfaceBg,
       appBar: AppBar(
+        toolbarHeight: 48,
         backgroundColor: barBg,
         foregroundColor: Colors.white,
         elevation: 0,
@@ -584,17 +665,43 @@ class _CameraCaptureCropScreenState
       ),
       body: Column(
         children: <Widget>[
-          Container(
-            width: double.infinity,
-            color: barBg,
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-            child: Text(
-              _buildHintText(isCropping),
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 12, color: Colors.white60),
+          Expanded(
+            child: Stack(
+              fit: StackFit.expand,
+              children: <Widget>[
+                _buildStageContent(),
+                if (_stage == _CaptureStage.preview ||
+                    _stage == _CaptureStage.cropping)
+                  Positioned(
+                    top: 10,
+                    left: 16,
+                    right: 16,
+                    child: IgnorePointer(
+                      child: Center(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 5,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.48),
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: Text(
+                            _buildHintText(isCropping),
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Colors.white70,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
-          Expanded(child: _buildStageContent()),
           _buildBottomBar(barBg),
         ],
       ),
@@ -603,7 +710,7 @@ class _CameraCaptureCropScreenState
 
   String _buildHintText(bool isCropping) {
     if (!isCropping) {
-      return '将目标题目对准中心拍照，拍完自动框选并可微调';
+      return '将单道题目对准中间框拍照，拍完自动框选并可微调';
     }
     if (_autoDetecting) {
       return '正在识别中间题目...';
@@ -691,90 +798,106 @@ class _CameraCaptureCropScreenState
         if (session == null || !session.isInitialized) {
           return const SizedBox.shrink();
         }
-        return Padding(
-          padding: kCropCanvasPadding,
-          child: Center(
-            child: Builder(
-              builder: (previewContext) {
-                return GestureDetector(
-                  key: const Key('camera-preview-surface'),
-                  behavior: HitTestBehavior.opaque,
-                  onTapDown: (details) {
-                    final box = previewContext.findRenderObject() as RenderBox?;
-                    if (box != null && box.hasSize) {
-                      _handleTapToFocus(details, box.size);
-                    }
-                  },
-                  child: Stack(
-                    alignment: Alignment.center,
-                    children: <Widget>[
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(10),
-                        child: session.buildPreview(),
-                      ),
-                      Positioned.fill(
-                        child: IgnorePointer(
-                          child: CustomPaint(
-                            painter: _ViewfinderGuidePainter(),
-                          ),
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            final viewport = constraints.biggest;
+            final previewAspect = session.previewAspectRatio;
+            final previewWidth = viewport.width;
+            final previewHeight = (previewAspect != null && previewAspect > 0)
+                ? previewWidth / previewAspect
+                : viewport.height;
+            final previewTop = (viewport.height - previewHeight) / 2.0;
+
+            return GestureDetector(
+              key: const Key('camera-preview-surface'),
+              behavior: HitTestBehavior.opaque,
+              onTapDown: (details) => _handleTapToFocus(
+                details,
+                previewRect: Rect.fromLTWH(
+                  0,
+                  previewTop,
+                  previewWidth,
+                  previewHeight,
+                ),
+              ),
+              child: SizedBox.expand(
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: <Widget>[
+                    Positioned.fill(
+                      child: ClipRect(
+                        child: OverflowBox(
+                          alignment: Alignment.center,
+                          minWidth: previewWidth,
+                          maxWidth: previewWidth,
+                          minHeight: previewHeight,
+                          maxHeight: previewHeight,
+                          child: session.buildPreview(),
                         ),
                       ),
-                      if (_focusIndicatorPosition != null)
-                        Positioned(
-                          left: _focusIndicatorPosition!.dx - 24,
-                          top: _focusIndicatorPosition!.dy - 24,
-                          child: IgnorePointer(
-                            child: Container(
-                              width: 48,
-                              height: 48,
-                              decoration: BoxDecoration(
-                                border: Border.all(
-                                  color: const Color(0xFF818CF8),
-                                  width: 2,
-                                ),
-                                borderRadius: BorderRadius.circular(8),
+                    ),
+                    Positioned.fill(
+                      child: IgnorePointer(
+                        child: CustomPaint(
+                          painter: _ViewfinderGuidePainter(),
+                        ),
+                      ),
+                    ),
+                    if (_focusIndicatorPosition != null)
+                      Positioned(
+                        left: _focusIndicatorPosition!.dx - 24,
+                        top: _focusIndicatorPosition!.dy - 24,
+                        child: IgnorePointer(
+                          child: Container(
+                            width: 48,
+                            height: 48,
+                            decoration: BoxDecoration(
+                              border: Border.all(
+                                color: const Color(0xFF818CF8),
+                                width: 2,
                               ),
+                              borderRadius: BorderRadius.circular(8),
                             ),
                           ),
                         ),
-                      if (_capturing)
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 10,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.black54,
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: const Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: <Widget>[
-                              SizedBox(
-                                width: 16,
-                                height: 16,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: Colors.white,
-                                ),
-                              ),
-                              SizedBox(width: 8),
-                              Text(
-                                '定格中...',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 13,
-                                ),
-                              ),
-                            ],
-                          ),
+                      ),
+                    if (_capturing)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 10,
                         ),
-                    ],
-                  ),
-                );
-              },
-            ),
-          ),
+                        decoration: BoxDecoration(
+                          color: Colors.black54,
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: <Widget>[
+                            SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            ),
+                            SizedBox(width: 8),
+                            Text(
+                              '定格中...',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            );
+          },
         );
       case _CaptureStage.cropping:
         final image = _capturedImage;
@@ -782,6 +905,8 @@ class _CameraCaptureCropScreenState
         return FreeCropCanvas(
           image: image,
           quarterTurns: _quarterTurns,
+          fineRotationDegrees: _fineRotationDegrees,
+          emphasizeGrid: _adjustingAngle,
           cropRect: _cropRect,
           enabled: !_saving,
           onInteractionStart: () {
@@ -809,64 +934,83 @@ class _CameraCaptureCropScreenState
         color: barBg,
         child: SafeArea(
           top: false,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 10, 14, 12),
-            child: Row(
-              children: <Widget>[
-                _ActionIconLabel(
-                  key: const Key('crop-auto-select'),
-                  icon: CupertinoIcons.viewfinder,
-                  label: '自动',
-                  onPressed:
-                      (_saving || _autoDetecting) ? null : _rerunAutoDetect,
-                ),
-                const SizedBox(width: 2),
-                _ActionIconLabel(
-                  key: const Key('crop-rotate-left'),
-                  icon: CupertinoIcons.rotate_left,
-                  label: '左旋',
-                  onPressed: _saving ? null : () => _rotate(clockwise: false),
-                ),
-                const SizedBox(width: 2),
-                _ActionIconLabel(
-                  key: const Key('crop-rotate-right'),
-                  icon: CupertinoIcons.rotate_right,
-                  label: '右旋',
-                  onPressed: _saving ? null : () => _rotate(clockwise: true),
-                ),
-                const SizedBox(width: 2),
-                _ActionIconLabel(
-                  key: const Key('crop-reset'),
-                  icon: CupertinoIcons.arrow_counterclockwise,
-                  label: '重置',
-                  onPressed: _saving ? null : _resetCrop,
-                ),
-                const Spacer(),
-                FilledButton.icon(
-                  key: const Key('crop-confirm'),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: primaryAccent,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 18,
-                      vertical: 12,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              CropAngleControl(
+                angleDegrees: _fineRotationDegrees,
+                enabled: !_saving,
+                onChangeStart: () => setState(() => _adjustingAngle = true),
+                onChangeEnd: () => setState(() => _adjustingAngle = false),
+                onChanged: _setFineRotation,
+              ),
+              Divider(
+                height: 1,
+                color: Colors.white.withValues(alpha: 0.08),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 14, 10),
+                child: Row(
+                  children: <Widget>[
+                    _ActionIconLabel(
+                      key: const Key('crop-auto-select'),
+                      icon: CupertinoIcons.viewfinder,
+                      label: '自动',
+                      onPressed: (_saving || _autoDetecting)
+                          ? null
+                          : _rerunAutoDetect,
                     ),
-                  ),
-                  onPressed: _saving ? null : _confirmCrop,
-                  icon: _saving
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : const Icon(CupertinoIcons.checkmark_alt, size: 18),
-                  label: Text(_saving ? '处理中...' : '开始分析'),
+                    const SizedBox(width: 2),
+                    _ActionIconLabel(
+                      key: const Key('crop-rotate-left'),
+                      icon: CupertinoIcons.rotate_left,
+                      label: '左旋',
+                      onPressed:
+                          _saving ? null : () => _rotate(clockwise: false),
+                    ),
+                    const SizedBox(width: 2),
+                    _ActionIconLabel(
+                      key: const Key('crop-rotate-right'),
+                      icon: CupertinoIcons.rotate_right,
+                      label: '右旋',
+                      onPressed:
+                          _saving ? null : () => _rotate(clockwise: true),
+                    ),
+                    const SizedBox(width: 2),
+                    _ActionIconLabel(
+                      key: const Key('crop-reset'),
+                      icon: CupertinoIcons.arrow_counterclockwise,
+                      label: '重置',
+                      onPressed: _saving ? null : _resetCrop,
+                    ),
+                    const Spacer(),
+                    FilledButton.icon(
+                      key: const Key('crop-confirm'),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: primaryAccent,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 18,
+                          vertical: 12,
+                        ),
+                      ),
+                      onPressed: _saving ? null : _confirmCrop,
+                      icon: _saving
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Icon(CupertinoIcons.checkmark_alt, size: 18),
+                      label: Text(_saving ? '处理中...' : '开始分析'),
+                    ),
+                  ],
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       );
@@ -964,68 +1108,84 @@ class _ActionIconLabel extends StatelessWidget {
 class _ViewfinderGuidePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
-    final guidePaint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.20)
-      ..strokeWidth = 0.8;
-    // Subtle horizontal level lines to help align printed question lines.
-    canvas.drawLine(
-      Offset(12, size.height / 3),
-      Offset(size.width - 12, size.height / 3),
-      guidePaint,
-    );
-    canvas.drawLine(
-      Offset(12, size.height * 2 / 3),
-      Offset(size.width - 12, size.height * 2 / 3),
-      guidePaint,
+    final guideRect = computeViewfinderGuideRect(size);
+    if (guideRect.isEmpty) return;
+
+    // Light translucent veil above & below the 4:1 band so the single-question
+    // framing zone stands out clearly while keeping surrounding lines readable.
+    final outerPath = Path()..addRect(Offset.zero & size);
+    final innerPath = Path()..addRect(guideRect);
+    final maskPath =
+        Path.combine(PathOperation.difference, outerPath, innerPath);
+    canvas.drawPath(
+      maskPath,
+      Paint()..color = Colors.black.withValues(alpha: 0.24),
     );
 
-    // Subtle center focus target showing which question will be auto-selected.
-    final center = Offset(size.width / 2, size.height / 2);
-    final halfW = (size.width * 0.16).clamp(24.0, 44.0);
-    final halfH = (size.height * 0.05).clamp(14.0, 22.0);
-    const arm = 10.0;
-    final targetPaint = Paint()
-      ..color = const Color(0xFFA5B4FC).withValues(alpha: 0.72)
-      ..strokeWidth = 1.6
+    // Subtle inset so 100%-width vertical borders and corner strokes stay crisp.
+    const edgeInset = 2.0;
+    final left = guideRect.left + edgeInset;
+    final right = math.max(left, guideRect.right - edgeInset);
+    final top = guideRect.top;
+    final bottom = guideRect.bottom;
+    final visualRect = Rect.fromLTRB(left, top, right, bottom);
+
+    // Crisp framing outline spanning 100% viewport width at ~4:1 ratio.
+    canvas.drawRect(
+      visualRect,
+      Paint()
+        ..color = Colors.white.withValues(alpha: 0.55)
+        ..strokeWidth = 1.2
+        ..style = PaintingStyle.stroke,
+    );
+
+    // Subtle horizontal level line through the vertical center of the 4:1 box.
+    canvas.drawLine(
+      Offset(left + 16, visualRect.center.dy),
+      Offset(right - 16, visualRect.center.dy),
+      Paint()
+        ..color = Colors.white.withValues(alpha: 0.16)
+        ..strokeWidth = 0.8,
+    );
+
+    // Highlighted corner brackets at all four corners of the 4:1 guide box.
+    final arm = math.min(20.0, visualRect.height * 0.28);
+    final cornerPaint = Paint()
+      ..color = const Color(0xFFA5B4FC).withValues(alpha: 0.90)
+      ..strokeWidth = 2.6
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
 
-    final left = center.dx - halfW;
-    final right = center.dx + halfW;
-    final top = center.dy - halfH;
-    final bottom = center.dy + halfH;
-
-    // Four subtle center corner brackets.
-    canvas.drawLine(Offset(left, top + arm), Offset(left, top), targetPaint);
-    canvas.drawLine(Offset(left, top), Offset(left + arm, top), targetPaint);
-    canvas.drawLine(Offset(right - arm, top), Offset(right, top), targetPaint);
-    canvas.drawLine(Offset(right, top), Offset(right, top + arm), targetPaint);
+    canvas.drawLine(Offset(left, top + arm), Offset(left, top), cornerPaint);
+    canvas.drawLine(Offset(left, top), Offset(left + arm, top), cornerPaint);
+    canvas.drawLine(Offset(right - arm, top), Offset(right, top), cornerPaint);
+    canvas.drawLine(Offset(right, top), Offset(right, top + arm), cornerPaint);
     canvas.drawLine(
       Offset(left, bottom - arm),
       Offset(left, bottom),
-      targetPaint,
+      cornerPaint,
     );
     canvas.drawLine(
       Offset(left, bottom),
       Offset(left + arm, bottom),
-      targetPaint,
+      cornerPaint,
     );
     canvas.drawLine(
       Offset(right - arm, bottom),
       Offset(right, bottom),
-      targetPaint,
+      cornerPaint,
     );
     canvas.drawLine(
       Offset(right, bottom - arm),
       Offset(right, bottom),
-      targetPaint,
+      cornerPaint,
     );
 
-    // Small center crosshair dot.
+    // Small center alignment dot.
     canvas.drawCircle(
-      center,
-      2.2,
-      Paint()..color = const Color(0xFFA5B4FC).withValues(alpha: 0.8),
+      visualRect.center,
+      2.4,
+      Paint()..color = const Color(0xFFA5B4FC).withValues(alpha: 0.85),
     );
   }
 

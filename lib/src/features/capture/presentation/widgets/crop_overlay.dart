@@ -13,11 +13,13 @@ class CropOverlay extends StatelessWidget {
     super.key,
     required this.cropRect,
     this.activeHandle,
+    this.emphasizeGrid = false,
     this.accentColor = const Color(0xFF818CF8),
   });
 
   final Rect cropRect;
   final CropHandle? activeHandle;
+  final bool emphasizeGrid;
   final Color accentColor;
 
   @override
@@ -26,6 +28,7 @@ class CropOverlay extends StatelessWidget {
       painter: _CropOverlayPainter(
         cropRect: cropRect,
         activeHandle: activeHandle,
+        emphasizeGrid: emphasizeGrid,
         accentColor: accentColor,
       ),
     );
@@ -36,11 +39,13 @@ class _CropOverlayPainter extends CustomPainter {
   const _CropOverlayPainter({
     required this.cropRect,
     required this.activeHandle,
+    required this.emphasizeGrid,
     required this.accentColor,
   });
 
   final Rect cropRect;
   final CropHandle? activeHandle;
+  final bool emphasizeGrid;
   final Color accentColor;
 
   @override
@@ -58,18 +63,20 @@ class _CropOverlayPainter extends CustomPainter {
       Paint()..color = Colors.black.withValues(alpha: 0.62),
     );
 
-    // Subtle 3x3 composition grid inside the crop box.
+    // Composition / leveling grid inside the crop box (denser and brighter
+    // while adjusting fine rotation angle so text lines are easy to level).
+    final divisions = emphasizeGrid ? 6 : 3;
     final gridPaint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.30)
-      ..strokeWidth = 0.8;
-    for (var i = 1; i <= 2; i++) {
-      final dx = cropRect.left + cropRect.width * i / 3;
+      ..color = Colors.white.withValues(alpha: emphasizeGrid ? 0.50 : 0.30)
+      ..strokeWidth = emphasizeGrid ? 0.9 : 0.8;
+    for (var i = 1; i < divisions; i++) {
+      final dx = cropRect.left + cropRect.width * i / divisions;
       canvas.drawLine(
         Offset(dx, cropRect.top),
         Offset(dx, cropRect.bottom),
         gridPaint,
       );
-      final dy = cropRect.top + cropRect.height * i / 3;
+      final dy = cropRect.top + cropRect.height * i / divisions;
       canvas.drawLine(
         Offset(cropRect.left, dy),
         Offset(cropRect.right, dy),
@@ -77,22 +84,34 @@ class _CropOverlayPainter extends CustomPainter {
       );
     }
 
+    // Keep border, L-corners, and pill handles crisply visible even when the
+    // crop rect sits flush at 100% screen edges (x = 0 or x = size.width).
+    const handleInset = 2.4;
+    final maxX = math.max(handleInset, size.width - handleInset);
+    final maxY = math.max(handleInset, size.height - handleInset);
+    final visualRect = Rect.fromLTRB(
+      cropRect.left.clamp(handleInset, maxX),
+      cropRect.top.clamp(handleInset, maxY),
+      cropRect.right.clamp(handleInset, maxX),
+      cropRect.bottom.clamp(handleInset, maxY),
+    );
+
     // Crisp selection border.
     final isDragging = activeHandle != null;
     final borderPaint = Paint()
       ..color = isDragging ? accentColor : Colors.white
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.8;
-    canvas.drawRect(cropRect, borderPaint);
+    canvas.drawRect(visualRect, borderPaint);
 
     // L-shaped corner brackets.
     final arm = math.min(
       20.0,
-      math.min(cropRect.width, cropRect.height) * 0.35,
+      math.min(visualRect.width, visualRect.height) * 0.35,
     );
     _drawCorner(
       canvas,
-      corner: cropRect.topLeft,
+      corner: visualRect.topLeft,
       dirX: 1,
       dirY: 1,
       arm: arm,
@@ -100,7 +119,7 @@ class _CropOverlayPainter extends CustomPainter {
     );
     _drawCorner(
       canvas,
-      corner: cropRect.topRight,
+      corner: visualRect.topRight,
       dirX: -1,
       dirY: 1,
       arm: arm,
@@ -108,7 +127,7 @@ class _CropOverlayPainter extends CustomPainter {
     );
     _drawCorner(
       canvas,
-      corner: cropRect.bottomLeft,
+      corner: visualRect.bottomLeft,
       dirX: 1,
       dirY: -1,
       arm: arm,
@@ -116,7 +135,7 @@ class _CropOverlayPainter extends CustomPainter {
     );
     _drawCorner(
       canvas,
-      corner: cropRect.bottomRight,
+      corner: visualRect.bottomRight,
       dirX: -1,
       dirY: -1,
       arm: arm,
@@ -125,33 +144,33 @@ class _CropOverlayPainter extends CustomPainter {
 
     // Centered edge pill bars (top, bottom, left, right) signaling free edge
     // resizing.
-    final hBarHalf = math.min(16.0, math.max(6.0, cropRect.width * 0.16));
-    final vBarHalf = math.min(16.0, math.max(6.0, cropRect.height * 0.16));
+    final hBarHalf = math.min(16.0, math.max(6.0, visualRect.width * 0.16));
+    final vBarHalf = math.min(16.0, math.max(6.0, visualRect.height * 0.16));
 
     _drawEdgeBar(
       canvas,
-      center: Offset(cropRect.center.dx, cropRect.top),
+      center: Offset(visualRect.center.dx, visualRect.top),
       horizontal: true,
       halfLength: hBarHalf,
       active: activeHandle == CropHandle.top,
     );
     _drawEdgeBar(
       canvas,
-      center: Offset(cropRect.center.dx, cropRect.bottom),
+      center: Offset(visualRect.center.dx, visualRect.bottom),
       horizontal: true,
       halfLength: hBarHalf,
       active: activeHandle == CropHandle.bottom,
     );
     _drawEdgeBar(
       canvas,
-      center: Offset(cropRect.left, cropRect.center.dy),
+      center: Offset(visualRect.left, visualRect.center.dy),
       horizontal: false,
       halfLength: vBarHalf,
       active: activeHandle == CropHandle.left,
     );
     _drawEdgeBar(
       canvas,
-      center: Offset(cropRect.right, cropRect.center.dy),
+      center: Offset(visualRect.right, visualRect.center.dy),
       horizontal: false,
       halfLength: vBarHalf,
       active: activeHandle == CropHandle.right,
@@ -211,6 +230,7 @@ class _CropOverlayPainter extends CustomPainter {
   bool shouldRepaint(_CropOverlayPainter oldDelegate) {
     return oldDelegate.cropRect != cropRect ||
         oldDelegate.activeHandle != activeHandle ||
+        oldDelegate.emphasizeGrid != emphasizeGrid ||
         oldDelegate.accentColor != accentColor;
   }
 }

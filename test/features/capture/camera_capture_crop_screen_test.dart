@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'package:image/image.dart' as img;
 import 'package:smart_wrong_notebook/src/app/providers.dart';
 import 'package:smart_wrong_notebook/src/data/files/image_storage_service.dart';
+import 'package:smart_wrong_notebook/src/data/repositories/question_repository.dart';
 import 'package:smart_wrong_notebook/src/data/repositories/settings_repository.dart';
 import 'package:smart_wrong_notebook/src/data/services/capture_service.dart';
 import 'package:smart_wrong_notebook/src/domain/models/ai_provider_config.dart';
@@ -17,6 +18,8 @@ import 'package:smart_wrong_notebook/src/features/capture/application/camera_cap
 import 'package:smart_wrong_notebook/src/features/capture/application/free_crop_geometry.dart';
 import 'package:smart_wrong_notebook/src/features/capture/presentation/camera_capture_crop_screen.dart';
 import 'package:smart_wrong_notebook/src/features/capture/presentation/capture_entry_sheet.dart';
+import 'package:smart_wrong_notebook/src/features/home/presentation/home_screen.dart';
+import 'package:smart_wrong_notebook/src/features/notebook/presentation/notebook_screen.dart';
 
 class _TempImageStorageService extends ImageStorageService {
   _TempImageStorageService(this.outputDir);
@@ -64,6 +67,9 @@ class _FakeCameraCaptureSession implements CameraCaptureSession {
   CaptureFlashMode get flashMode => _flashMode;
 
   @override
+  double? get previewAspectRatio => isInitialized ? (9 / 16) : null;
+
+  @override
   Future<void> initialize() async {
     initializeCount++;
     if (initError != null) {
@@ -75,7 +81,7 @@ class _FakeCameraCaptureSession implements CameraCaptureSession {
   @override
   Widget buildPreview() {
     return const AspectRatio(
-      aspectRatio: 0.5,
+      aspectRatio: 9 / 16,
       child: ColoredBox(
         key: Key('fake-camera-preview'),
         color: Color(0xFF1F2937),
@@ -833,6 +839,213 @@ void main() {
         expect(find.text('CROP_ROUTE'), findsOneWidget);
         expect(fakeCapture.galleryCalls, 1);
         expect(container.read(currentQuestionProvider)?.id, 'q-gallery-1');
+      },
+    );
+  });
+
+  group('Direct capture entry & 100%-width 4:1 viewfinder guide', () {
+    test('computeViewfinderGuideRect spans 100% width with 4:1 aspect ratio',
+        () {
+      const phoneViewport = Size(412, 700);
+      final guide = computeViewfinderGuideRect(phoneViewport);
+
+      expect(guide.left, 0);
+      expect(guide.width, phoneViewport.width);
+      expect(guide.width / guide.height, closeTo(4.0, 1e-6));
+      expect(guide.center.dy, closeTo(phoneViewport.height / 2, 1e-6));
+    });
+
+    testWidgets('live camera preview surface fills 100% viewport width',
+        (tester) async {
+      final session = _FakeCameraCaptureSession();
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: <Override>[
+            cameraCaptureSessionFactoryProvider
+                .overrideWithValue(() => session),
+          ],
+          child: const MaterialApp(home: CameraCaptureCropScreen()),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final scaffoldRect = tester.getRect(find.byType(Scaffold));
+      final surfaceRect =
+          tester.getRect(find.byKey(const Key('camera-preview-surface')));
+      final previewRect =
+          tester.getRect(find.byKey(const Key('fake-camera-preview')));
+
+      expect(surfaceRect.left, closeTo(0.0, 0.5));
+      expect(surfaceRect.width, closeTo(scaffoldRect.width, 0.5));
+      expect(previewRect.width, closeTo(scaffoldRect.width, 0.5));
+    });
+
+    testWidgets(
+      'tapping 拍照录题 on HomeScreen opens /capture/camera directly without bottom sheet',
+      (tester) async {
+        final router = GoRouter(
+          initialLocation: '/',
+          routes: <RouteBase>[
+            GoRoute(
+              path: '/',
+              builder: (_, __) => const Scaffold(body: HomeScreen()),
+            ),
+            GoRoute(
+              path: '/capture/camera',
+              builder: (_, __) =>
+                  const Scaffold(body: Text('DIRECT_CAMERA_ROUTE')),
+            ),
+          ],
+        );
+        addTearDown(router.dispose);
+
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: <Override>[
+              questionRepositoryProvider
+                  .overrideWithValue(InMemoryQuestionRepository()),
+              settingsRepositoryProvider
+                  .overrideWithValue(_ConfiguredSettingsRepository()),
+            ],
+            child: MaterialApp.router(routerConfig: router),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.text('拍照录题'));
+        await tester.pumpAndSettle();
+
+        expect(find.byType(CaptureEntrySheet), findsNothing);
+        expect(find.text('DIRECT_CAMERA_ROUTE'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'tapping camera button on NotebookScreen opens /capture/camera directly without bottom sheet',
+      (tester) async {
+        final router = GoRouter(
+          initialLocation: '/notebook',
+          routes: <RouteBase>[
+            GoRoute(
+              path: '/notebook',
+              builder: (_, __) => const NotebookScreen(),
+            ),
+            GoRoute(
+              path: '/capture/camera',
+              builder: (_, __) =>
+                  const Scaffold(body: Text('DIRECT_CAMERA_ROUTE')),
+            ),
+          ],
+        );
+        addTearDown(router.dispose);
+
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: <Override>[
+              questionRepositoryProvider
+                  .overrideWithValue(InMemoryQuestionRepository()),
+              settingsRepositoryProvider
+                  .overrideWithValue(_ConfiguredSettingsRepository()),
+            ],
+            child: MaterialApp.router(routerConfig: router),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byTooltip('添加错题'));
+        await tester.pumpAndSettle();
+
+        expect(find.byType(CaptureEntrySheet), findsNothing);
+        expect(find.text('DIRECT_CAMERA_ROUTE'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'crop screen lets user straighten photo angle with slider, reset via badge, and export rotated image',
+      (tester) async {
+        final tempDir =
+            Directory.systemTemp.createTempSync('camera_angle_test_');
+        final storage = _TempImageStorageService(tempDir);
+        final session = _FakeCameraCaptureSession(
+          photoFactory: () => _createThreeBandWorksheetPng(
+            tempDir,
+            name: 'angle_shot.png',
+            width: 300,
+            height: 300,
+          ),
+        );
+
+        final router = GoRouter(
+          initialLocation: '/capture/camera',
+          routes: <RouteBase>[
+            GoRoute(
+              path: '/capture/camera',
+              builder: (_, __) => const CameraCaptureCropScreen(),
+            ),
+            GoRoute(
+              path: '/analysis/loading',
+              builder: (_, __) => const Scaffold(body: Text('LOADING_ROUTE')),
+            ),
+          ],
+        );
+        addTearDown(router.dispose);
+
+        try {
+          await tester.pumpWidget(
+            ProviderScope(
+              overrides: <Override>[
+                cameraCaptureSessionFactoryProvider
+                    .overrideWithValue(() => session),
+                imageStorageServiceProvider.overrideWithValue(storage),
+              ],
+              child: MaterialApp.router(routerConfig: router),
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          await tester.tap(find.byKey(const Key('camera-shutter-button')));
+          await tester.pump();
+          await _pumpUntilFound(tester, find.byKey(const Key('crop-canvas')));
+          await tester.pumpAndSettle();
+
+          expect(find.byKey(const Key('crop-angle-slider')), findsOneWidget);
+          expect(find.text('0°'), findsOneWidget);
+
+          // Drag the angle slider right to tilt clockwise.
+          await tester.drag(
+            find.byKey(const Key('crop-angle-slider')),
+            const Offset(80, 0),
+          );
+          await tester.pumpAndSettle();
+          expect(find.text('0°'), findsNothing);
+
+          // Tapping the angle badge resets angle cleanly back to 0°.
+          await tester.tap(find.byKey(const Key('crop-angle-reset')));
+          await tester.pumpAndSettle();
+          expect(find.text('0°'), findsOneWidget);
+
+          // Tilt again and confirm without moving crop box handles -> must
+          // still re-encode (not take unmodified-original fast path).
+          await tester.drag(
+            find.byKey(const Key('crop-angle-slider')),
+            const Offset(90, 0),
+          );
+          await tester.pumpAndSettle();
+
+          await tester.tap(find.byKey(const Key('crop-confirm')));
+          await tester.pump();
+          await _pumpUntilFound(tester, find.text('LOADING_ROUTE'));
+          await tester.pumpAndSettle();
+
+          expect(storage.lastSavedPath, isNotNull);
+          final savedBytes = File(storage.lastSavedPath!).readAsBytesSync();
+          // Encoded as JPEG (whereas raw capture was PNG), proving fine
+          // rotation bypassed the unmodified-original fast path!
+          expect(savedBytes.sublist(0, 3), <int>[0xFF, 0xD8, 0xFF]);
+        } finally {
+          tempDir.deleteSync(recursive: true);
+        }
       },
     );
   });

@@ -18,6 +18,7 @@ const int kAutoDetectMaxDimension = 360;
 Future<ui.Rect?> detectCenterQuestionCropRect({
   required ui.Image sourceImage,
   int quarterTurns = 0,
+  double fineRotationDegrees = 0.0,
 }) async {
   final normalizedTurns = ((quarterTurns % 4) + 4) % 4;
   final spec = computeOutputCropSpec(
@@ -38,7 +39,21 @@ Future<ui.Rect?> detectCenterQuestionCropRect({
   try {
     final recorder = ui.PictureRecorder();
     final canvas = ui.Canvas(recorder);
+    if (fineRotationDegrees.abs() > 1e-4) {
+      canvas.drawRect(
+        ui.Rect.fromLTWH(0, 0, workW.toDouble(), workH.toDouble()),
+        ui.Paint()..color = const ui.Color(0xFFFFFFFF),
+      );
+    }
     canvas.scale(workW / spec.cropWidth, workH / spec.cropHeight);
+
+    if (fineRotationDegrees.abs() > 1e-4) {
+      final cx = spec.rotatedWidth / 2.0;
+      final cy = spec.rotatedHeight / 2.0;
+      canvas.translate(cx, cy);
+      canvas.rotate(fineRotationDegrees * math.pi / 180.0);
+      canvas.translate(-cx, -cy);
+    }
 
     switch (normalizedTurns) {
       case 1:

@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -13,6 +14,7 @@ import 'package:smart_wrong_notebook/src/domain/models/subject.dart';
 import 'package:smart_wrong_notebook/src/features/capture/application/free_crop_geometry.dart';
 import 'package:smart_wrong_notebook/src/features/capture/application/image_crop_processor.dart';
 import 'package:smart_wrong_notebook/src/features/capture/presentation/image_crop_screen.dart';
+import 'package:smart_wrong_notebook/src/features/capture/presentation/widgets/crop_angle_control.dart';
 
 class _TempImageStorageService extends ImageStorageService {
   _TempImageStorageService(this.outputDir);
@@ -264,6 +266,70 @@ void main() {
       } finally {
         tempDir.deleteSync(recursive: true);
       }
+    });
+
+    test('straightens a -25 degree tilted question bar accurately with fineRotationDegrees',
+        () async {
+      final tempDir =
+          Directory.systemTemp.createTempSync('free_crop_fine_angle_');
+      try {
+        // Draw a 300x300 white canvas with a green stripe tilted -25° CCW
+        // through the center (150, 150). Rotating +25° CW must level it
+        // horizontally across the middle crop strip.
+        const size = 300;
+        final canvas = img.Image(width: size, height: size);
+        final slope = math.tan(-25 * math.pi / 180);
+        for (var y = 0; y < size; y++) {
+          for (var x = 0; x < size; x++) {
+            final expectedY = 150 + (x - 150) * slope;
+            if ((y - expectedY).abs() <= 14) {
+              canvas.setPixelRgb(x, y, 20, 210, 20);
+            } else {
+              canvas.setPixelRgb(x, y, 245, 245, 245);
+            }
+          }
+        }
+        final file = File('${tempDir.path}/tilted.png');
+        file.writeAsBytesSync(img.encodePng(canvas));
+
+        final decoded = await decodeImageForCrop(file);
+        try {
+          final jpgBytes = await cropAndEncodeJpg(
+            sourceImage: decoded,
+            quarterTurns: 0,
+            fineRotationDegrees: 25.0,
+            normalizedCropRect: const Rect.fromLTRB(0.25, 0.46, 0.75, 0.54),
+          );
+          final out = img.decodeJpg(jpgBytes)!;
+          final midY = out.height ~/ 2;
+          for (final frac in <double>[0.15, 0.50, 0.85]) {
+            final p = out.getPixel((out.width * frac).round(), midY);
+            expect(p.g, greaterThan(170));
+            expect(p.r, lessThan(60));
+            expect(p.b, lessThan(60));
+          }
+        } finally {
+          decoded.dispose();
+        }
+      } finally {
+        tempDir.deleteSync(recursive: true);
+      }
+    });
+  });
+
+  group('CropAngleControl helpers', () {
+    test('snaps near zero and rounds to 0.5 degree increments within [-45, 45]',
+        () {
+      expect(CropAngleControl.snapAngle(0.4), 0.0);
+      expect(CropAngleControl.snapAngle(-0.7), 0.0);
+      expect(CropAngleControl.snapAngle(3.26), 3.5);
+      expect(CropAngleControl.snapAngle(-12.1), -12.0);
+      expect(CropAngleControl.snapAngle(60.0), 45.0);
+      expect(CropAngleControl.snapAngle(-60.0), -45.0);
+
+      expect(CropAngleControl.formatAngle(0.0), '0°');
+      expect(CropAngleControl.formatAngle(5.0), '+5°');
+      expect(CropAngleControl.formatAngle(-3.5), '-3.5°');
     });
   });
 

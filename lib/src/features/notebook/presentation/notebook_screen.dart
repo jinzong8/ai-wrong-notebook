@@ -6,7 +6,7 @@ import 'package:smart_wrong_notebook/src/app/providers.dart';
 import 'package:smart_wrong_notebook/src/domain/models/mastery_level.dart';
 import 'package:smart_wrong_notebook/src/domain/models/question_record.dart';
 import 'package:smart_wrong_notebook/src/domain/models/subject.dart';
-import 'package:smart_wrong_notebook/src/features/capture/presentation/capture_entry_sheet.dart';
+import 'package:smart_wrong_notebook/src/features/capture/presentation/camera_capture_crop_screen.dart';
 import 'package:smart_wrong_notebook/src/shared/widgets/math_content_view.dart';
 
 class NotebookScreen extends ConsumerStatefulWidget {
@@ -63,10 +63,7 @@ class _NotebookScreenState extends ConsumerState<NotebookScreen> {
         actions: [
           IconButton(
             icon: const Icon(CupertinoIcons.camera),
-            onPressed: () => showModalBottomSheet<void>(
-              context: context,
-              builder: (_) => const CaptureEntrySheet(),
-            ),
+            onPressed: () => openCameraCaptureFlow(context, ref),
             tooltip: '添加错题',
           ),
         ],

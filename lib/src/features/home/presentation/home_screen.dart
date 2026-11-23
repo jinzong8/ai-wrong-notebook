@@ -7,7 +7,7 @@ import 'package:smart_wrong_notebook/src/common/widgets/stats_chart.dart';
 import 'package:smart_wrong_notebook/src/data/services/question_analysis_coordinator.dart';
 import 'package:smart_wrong_notebook/src/domain/models/mastery_level.dart';
 import 'package:smart_wrong_notebook/src/domain/models/question_record.dart';
-import 'package:smart_wrong_notebook/src/features/capture/presentation/capture_entry_sheet.dart';
+import 'package:smart_wrong_notebook/src/features/capture/presentation/camera_capture_crop_screen.dart';
 import 'package:smart_wrong_notebook/src/features/home/presentation/background_analysis_section.dart';
 import 'package:smart_wrong_notebook/src/shared/widgets/math_content_view.dart';
 
@@ -33,10 +33,7 @@ class HomeScreen extends ConsumerWidget {
           ),
           const SizedBox(height: 16),
           FilledButton.icon(
-            onPressed: () => showModalBottomSheet<void>(
-              context: context,
-              builder: (_) => const CaptureEntrySheet(),
-            ),
+            onPressed: () => openCameraCaptureFlow(context, ref),
             icon: const Icon(CupertinoIcons.camera),
             label: const Text('拍照录题'),
             style: FilledButton.styleFrom(

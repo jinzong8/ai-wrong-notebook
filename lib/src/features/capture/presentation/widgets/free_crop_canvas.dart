@@ -1,18 +1,17 @@
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:smart_wrong_notebook/src/features/capture/application/free_crop_geometry.dart';
 import 'package:smart_wrong_notebook/src/features/capture/presentation/widgets/crop_overlay.dart';
 
-/// Shared padding around the image viewport so edge and corner drag handles stay
-/// comfortably clear of system edge-back gesture zones.
-const EdgeInsets kCropCanvasPadding = EdgeInsets.symmetric(
-  horizontal: 24,
-  vertical: 20,
-);
+/// Full-width (0 horizontal padding) crop canvas margin with a small vertical
+/// buffer so top/bottom edge handles remain comfortably clear of toolbars.
+const EdgeInsets kCropCanvasPadding = EdgeInsets.symmetric(vertical: 10);
 
 /// Interactive free-form image cropping surface with independent 4-edge,
-/// 4-corner, and interior move dragging (zero aspect-ratio restriction).
+/// 4-corner, and interior move dragging (zero aspect-ratio restriction), plus
+/// real-time fine-angle straightening preview.
 class FreeCropCanvas extends StatefulWidget {
   const FreeCropCanvas({
     super.key,
@@ -20,6 +19,8 @@ class FreeCropCanvas extends StatefulWidget {
     required this.quarterTurns,
     required this.cropRect,
     required this.onCropRectChanged,
+    this.fineRotationDegrees = 0.0,
+    this.emphasizeGrid = false,
     this.onInteractionStart,
     this.enabled = true,
     this.padding = kCropCanvasPadding,
@@ -29,6 +30,8 @@ class FreeCropCanvas extends StatefulWidget {
   final int quarterTurns;
   final Rect cropRect;
   final ValueChanged<Rect> onCropRectChanged;
+  final double fineRotationDegrees;
+  final bool emphasizeGrid;
   final VoidCallback? onInteractionStart;
   final bool enabled;
   final EdgeInsets padding;
@@ -65,6 +68,7 @@ class _FreeCropCanvasState extends State<FreeCropCanvas> {
     final orientedSize = widget.quarterTurns.isOdd
         ? Size(widget.image.height.toDouble(), widget.image.width.toDouble())
         : Size(widget.image.width.toDouble(), widget.image.height.toDouble());
+    final fineRadians = widget.fineRotationDegrees * math.pi / 180.0;
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -75,6 +79,24 @@ class _FreeCropCanvasState extends State<FreeCropCanvas> {
         );
         final screenCropRect =
             normalizedToDisplayRect(_cropRect, displayRect);
+
+        Widget imageWidget = RotatedBox(
+          quarterTurns: widget.quarterTurns,
+          child: RawImage(
+            image: widget.image,
+            fit: BoxFit.fill,
+            filterQuality: FilterQuality.medium,
+          ),
+        );
+        if (fineRadians.abs() > 1e-4) {
+          imageWidget = ClipRect(
+            child: Transform.rotate(
+              angle: fineRadians,
+              alignment: Alignment.center,
+              child: imageWidget,
+            ),
+          );
+        }
 
         return GestureDetector(
           key: const Key('crop-canvas'),
@@ -122,20 +144,14 @@ class _FreeCropCanvasState extends State<FreeCropCanvas> {
             children: <Widget>[
               Positioned.fromRect(
                 rect: displayRect,
-                child: RotatedBox(
-                  quarterTurns: widget.quarterTurns,
-                  child: RawImage(
-                    image: widget.image,
-                    fit: BoxFit.fill,
-                    filterQuality: FilterQuality.medium,
-                  ),
-                ),
+                child: imageWidget,
               ),
               Positioned.fill(
                 child: IgnorePointer(
                   child: CropOverlay(
                     cropRect: screenCropRect,
                     activeHandle: _activeHandle,
+                    emphasizeGrid: widget.emphasizeGrid,
                   ),
                 ),
               ),

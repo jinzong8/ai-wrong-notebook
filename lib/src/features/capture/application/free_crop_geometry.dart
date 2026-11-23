@@ -47,7 +47,7 @@ const Rect fullNormalizedCropRect = Rect.fromLTRB(0.0, 0.0, 1.0, 1.0);
 Rect computeFittedImageRect({
   required Size viewportSize,
   required Size imageSize,
-  EdgeInsets padding = const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+  EdgeInsets padding = const EdgeInsets.symmetric(vertical: 10),
 }) {
   final availW = math.max(1.0, viewportSize.width - padding.horizontal);
   final availH = math.max(1.0, viewportSize.height - padding.vertical);

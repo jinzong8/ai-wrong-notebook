@@ -22,10 +22,15 @@ Future<ui.Image> decodeImageForCrop(File file) async {
 
 /// Crops and optionally rotates [sourceImage] to [normalizedCropRect] without
 /// any aspect-ratio constraint, encoding the result as a compact JPEG.
+///
+/// [quarterTurns] applies coarse 90° clockwise rotations and
+/// [fineRotationDegrees] applies fine straightening (e.g. `-45°..+45°`) around
+/// the center of the oriented image, matching `FreeCropCanvas` pixel-for-pixel.
 Future<Uint8List> cropAndEncodeJpg({
   required ui.Image sourceImage,
   required int quarterTurns,
   required ui.Rect normalizedCropRect,
+  double fineRotationDegrees = 0.0,
   int jpegQuality = 85,
   int maxOutputDimension = 2400,
 }) async {
@@ -41,11 +46,33 @@ Future<Uint8List> cropAndEncodeJpg({
   final recorder = ui.PictureRecorder();
   final canvas = ui.Canvas(recorder);
 
+  if (fineRotationDegrees.abs() > 1e-4) {
+    // Fill exposed rotated corners with paper-white so dark triangles never
+    // interfere with downstream AI reading if a crop sits near a tilted corner.
+    canvas.drawRect(
+      ui.Rect.fromLTWH(
+        0,
+        0,
+        spec.outputWidth.toDouble(),
+        spec.outputHeight.toDouble(),
+      ),
+      ui.Paint()..color = const ui.Color(0xFFFFFFFF),
+    );
+  }
+
   canvas.scale(
     spec.outputWidth / spec.cropWidth,
     spec.outputHeight / spec.cropHeight,
   );
   canvas.translate(-spec.cropLeft.toDouble(), -spec.cropTop.toDouble());
+
+  if (fineRotationDegrees.abs() > 1e-4) {
+    final cx = spec.rotatedWidth / 2.0;
+    final cy = spec.rotatedHeight / 2.0;
+    canvas.translate(cx, cy);
+    canvas.rotate(fineRotationDegrees * math.pi / 180.0);
+    canvas.translate(-cx, -cy);
+  }
 
   switch (normalizedTurns) {
     case 1:

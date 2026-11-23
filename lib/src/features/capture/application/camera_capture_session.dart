@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 /// Flash options exposed by the in-app camera capture screen.
 enum CaptureFlashMode {
@@ -23,6 +24,10 @@ extension CaptureFlashModeLabel on CaptureFlashMode {
 abstract interface class CameraCaptureSession {
   bool get isInitialized;
   CaptureFlashMode get flashMode;
+
+  /// Portrait/landscape adjusted preview aspect ratio (`width / height`), or
+  /// `null` before initialization.
+  double? get previewAspectRatio;
 
   Future<void> initialize();
   Widget buildPreview();
@@ -48,6 +53,20 @@ class PluginCameraCaptureSession implements CameraCaptureSession {
 
   @override
   CaptureFlashMode get flashMode => _flashMode;
+
+  @override
+  double? get previewAspectRatio {
+    final controller = _controller;
+    if (controller == null || !isInitialized) return null;
+    final raw = controller.value.aspectRatio;
+    if (raw <= 0) return null;
+    final orientation = controller.value.previewPauseOrientation ??
+        controller.value.lockedCaptureOrientation ??
+        controller.value.deviceOrientation;
+    final isLandscape = orientation == DeviceOrientation.landscapeLeft ||
+        orientation == DeviceOrientation.landscapeRight;
+    return isLandscape ? raw : (1.0 / raw);
+  }
 
   @override
   Future<void> initialize() async {

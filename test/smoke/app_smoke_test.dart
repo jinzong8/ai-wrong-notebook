@@ -53,19 +53,20 @@ void main() {
       expect(find.text('最近新增'), findsOneWidget);
     });
 
-    testWidgets('user can tap camera button and see capture sheet',
+    testWidgets(
+        'tapping 拍照录题 skips capture sheet and prompts when AI is not configured',
         (tester) async {
       await tester.pumpWidget(ProviderScope(
         overrides: [_repoOverride, _settingsOverride],
-        child: const MaterialApp(home: HomeScreen()),
+        child: const MaterialApp(home: Scaffold(body: HomeScreen())),
       ));
       await tester.pumpAndSettle();
 
       await tester.tap(find.text('拍照录题'));
       await tester.pumpAndSettle();
 
-      expect(find.text('拍照'), findsOneWidget);
-      expect(find.text('相册'), findsOneWidget);
+      expect(find.byType(CaptureEntrySheet), findsNothing);
+      expect(find.text('请先在设置中配置 AI 服务'), findsOneWidget);
     });
 
     testWidgets('settings screen shows all required entries', (tester) async {
