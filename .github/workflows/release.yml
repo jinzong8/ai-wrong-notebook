@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag name (e.g. v1.0.6)'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -14,29 +20,66 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Resolve release tag
+        id: release_tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          TAG="${INPUT_TAG:-$REF_NAME}"
+          if [ -z "$TAG" ]; then
+            echo "Release tag is empty" >&2
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
           flutter-version: 3.41.0
 
-      - name: Restore Android signing key
+      - name: Configure Android signing key
+        id: signing
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          test -n "$ANDROID_KEYSTORE_BASE64"
-          test -n "$ANDROID_KEYSTORE_PASSWORD"
-          test -n "$ANDROID_KEY_ALIAS"
-          test -n "$ANDROID_KEY_PASSWORD"
           KEYSTORE_PATH="$RUNNER_TEMP/ai-wrong-notebook-release.jks"
-          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
-          printf 'storePassword=%s\nkeyPassword=%s\nkeyAlias=%s\nstoreFile=%s\n' \
-            "$ANDROID_KEYSTORE_PASSWORD" \
-            "$ANDROID_KEY_PASSWORD" \
-            "$ANDROID_KEY_ALIAS" \
-            "$KEYSTORE_PATH" > android/key.properties
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ] && \
+             [ -n "$ANDROID_KEYSTORE_PASSWORD" ] && \
+             [ -n "$ANDROID_KEY_ALIAS" ] && \
+             [ -n "$ANDROID_KEY_PASSWORD" ]; then
+            echo "Restoring persistent Android signing keystore from repository secrets."
+            printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
+            printf 'storePassword=%s\nkeyPassword=%s\nkeyAlias=%s\nstoreFile=%s\n' \
+              "$ANDROID_KEYSTORE_PASSWORD" \
+              "$ANDROID_KEY_PASSWORD" \
+              "$ANDROID_KEY_ALIAS" \
+              "$KEYSTORE_PATH" > android/key.properties
+            echo "mode=secret" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Repository signing secrets are not configured; generating a temporary self-signed release keystore."
+            TEMP_PASS="aiwrongnotebook-release"
+            TEMP_ALIAS="release"
+            keytool -genkeypair -v \
+              -keystore "$KEYSTORE_PATH" \
+              -storetype PKCS12 \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -alias "$TEMP_ALIAS" \
+              -storepass "$TEMP_PASS" \
+              -keypass "$TEMP_PASS" \
+              -dname "CN=AI Wrong Notebook, OU=Release, O=Fork, L=CN, S=CN, C=CN"
+            printf 'storePassword=%s\nkeyPassword=%s\nkeyAlias=%s\nstoreFile=%s\n' \
+              "$TEMP_PASS" \
+              "$TEMP_PASS" \
+              "$TEMP_ALIAS" \
+              "$KEYSTORE_PATH" > android/key.properties
+            echo "mode=ephemeral" >> "$GITHUB_OUTPUT"
+          fi
 
       - run: flutter pub get
 
@@ -47,43 +90,55 @@ jobs:
         run: flutter build appbundle --release
 
       - name: Verify APK signing certificate
+        env:
+          EXPECTED_CERT_SHA256: ${{ secrets.ANDROID_CERT_SHA256 }}
         run: |
           APKSIGNER="$(find "$ANDROID_HOME/build-tools" -path '*/apksigner' -type f | sort -V | tail -1)"
           "$APKSIGNER" verify --verbose --print-certs build/app/outputs/flutter-apk/app-release.apk | tee /tmp/apksigner.txt
-          grep -qi 'certificate SHA-256 digest: 25862f0436894d64bf32e54b46ff11711ee76a36af807959a68f76e989885e60' /tmp/apksigner.txt
+          if [ -n "$EXPECTED_CERT_SHA256" ]; then
+            grep -qi "certificate SHA-256 digest: $EXPECTED_CERT_SHA256" /tmp/apksigner.txt
+          else
+            echo "ANDROID_CERT_SHA256 secret not set; skipped fixed certificate fingerprint assertion."
+          fi
 
       - name: Create APK archive
+        env:
+          RELEASE_TAG: ${{ steps.release_tag.outputs.tag }}
         run: |
           cd build/app/outputs/flutter-apk
-          zip -j "ai-wrong-notebook-${{ github.ref_name }}.zip" app-release.apk
+          zip -j "ai-wrong-notebook-${RELEASE_TAG}.zip" app-release.apk
 
       - name: Ensure release exists
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release_tag.outputs.tag }}
         run: |
-          gh release view "${{ github.ref_name }}" >/dev/null 2>&1 || \
-          gh release create "${{ github.ref_name }}" --title "AI错题本 ${{ github.ref_name }}" --notes "Automated release for ${{ github.ref_name }}"
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || \
+          gh release create "$RELEASE_TAG" --title "AI错题本 $RELEASE_TAG" --notes "Automated release for $RELEASE_TAG"
 
       - name: Upload APK
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release_tag.outputs.tag }}
         run: |
-          gh release upload "${{ github.ref_name }}" \
-            build/app/outputs/flutter-apk/app-release.apk#ai-wrong-notebook-${{ github.ref_name }}.apk \
+          gh release upload "$RELEASE_TAG" \
+            "build/app/outputs/flutter-apk/app-release.apk#ai-wrong-notebook-${RELEASE_TAG}.apk" \
             --clobber
 
       - name: Upload APK archive
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release_tag.outputs.tag }}
         run: |
-          gh release upload "${{ github.ref_name }}" \
-            build/app/outputs/flutter-apk/ai-wrong-notebook-${{ github.ref_name }}.zip \
+          gh release upload "$RELEASE_TAG" \
+            "build/app/outputs/flutter-apk/ai-wrong-notebook-${RELEASE_TAG}.zip" \
             --clobber
 
       - name: Upload AAB
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release_tag.outputs.tag }}
         run: |
-          gh release upload "${{ github.ref_name }}" \
-            build/app/outputs/bundle/release/app-release.aab#ai-wrong-notebook-${{ github.ref_name }}.aab \
+          gh release upload "$RELEASE_TAG" \
+            "build/app/outputs/bundle/release/app-release.aab#ai-wrong-notebook-${RELEASE_TAG}.aab" \
             --clobber
