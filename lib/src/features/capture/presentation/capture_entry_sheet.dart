@@ -51,7 +51,7 @@ class _CaptureEntrySheetState extends ConsumerState<CaptureEntrySheet> {
                   children: <Widget>[
                     const CircularProgressIndicator(),
                     const SizedBox(height: 16),
-                    Text('正在打开相机...',
+                    Text('正在打开相册...',
                         style: TextStyle(color: colorScheme.onSurfaceVariant)),
                   ],
                 ),
@@ -64,7 +64,7 @@ class _CaptureEntrySheetState extends ConsumerState<CaptureEntrySheet> {
                     ? const Color(0xFF6366F1).withValues(alpha: 0.16)
                     : const Color(0xFFEEF2FF),
                 label: '拍照',
-                description: '使用相机拍摄错题',
+                description: '拍完直接自由框选错题',
                 onTap: () => _pickAndNavigate(fromCamera: true),
               ),
               const SizedBox(height: 10),
@@ -127,12 +127,25 @@ class _CaptureEntrySheetState extends ConsumerState<CaptureEntrySheet> {
     // 先检查 AI 是否已配置
     final config =
         await ref.read(settingsRepositoryProvider).getAiProviderConfig();
+    if (!mounted) return;
     if (config == null ||
         config.baseUrl.isEmpty ||
         config.apiKey.isEmpty ||
         config.model.isEmpty) {
-      setState(() => _isLoading = false);
-      setState(() => _errorMessage = '请先在设置中配置 AI 服务');
+      setState(() {
+        _isLoading = false;
+        _errorMessage = '请先在设置中配置 AI 服务';
+      });
+      return;
+    }
+
+    if (fromCamera) {
+      final navigator = Navigator.of(context);
+      if (navigator.canPop()) {
+        navigator.pop();
+      }
+      debugPrint('[CaptureEntrySheet] Navigating to /capture/camera');
+      router.go('/capture/camera');
       return;
     }
 
@@ -143,9 +156,7 @@ class _CaptureEntrySheetState extends ConsumerState<CaptureEntrySheet> {
 
     try {
       final capture = ref.read(captureServiceProvider);
-      final result = fromCamera
-          ? await capture.pickFromCamera()
-          : await capture.pickFromGallery();
+      final result = await capture.pickFromGallery();
 
       if (!mounted) return;
 
@@ -153,7 +164,10 @@ class _CaptureEntrySheetState extends ConsumerState<CaptureEntrySheet> {
 
       if (result.isCancelled) {
         // User cancelled - just close the sheet silently
-        Navigator.pop(context);
+        final navigator = Navigator.of(context);
+        if (navigator.canPop()) {
+          navigator.pop();
+        }
         return;
       }
 
@@ -161,7 +175,7 @@ class _CaptureEntrySheetState extends ConsumerState<CaptureEntrySheet> {
         // Show error message
         String message;
         if (result.errorMessage!.contains('permission')) {
-          message = '相机权限被拒绝，请在系统设置中开启';
+          message = '相册权限被拒绝，请在系统设置中开启';
         } else {
           message = '打开失败: ${result.errorMessage}';
         }
@@ -170,7 +184,10 @@ class _CaptureEntrySheetState extends ConsumerState<CaptureEntrySheet> {
       }
 
       if (result.record != null) {
-        Navigator.pop(context);
+        final navigator = Navigator.of(context);
+        if (navigator.canPop()) {
+          navigator.pop();
+        }
         ref.read(currentQuestionProvider.notifier).state = result.record;
         debugPrint('[CaptureEntrySheet] Navigating to /capture/crop');
         router.go('/capture/crop');

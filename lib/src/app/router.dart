@@ -13,6 +13,8 @@ import 'package:smart_wrong_notebook/src/features/settings/presentation/provider
 import 'package:smart_wrong_notebook/src/features/settings/presentation/subject_management_screen.dart';
 import 'package:smart_wrong_notebook/src/features/settings/presentation/prompt_settings_screen.dart';
 import 'package:smart_wrong_notebook/src/features/settings/presentation/data_management_screen.dart';
+import 'package:smart_wrong_notebook/src/features/capture/presentation/camera_capture_crop_screen.dart';
+import 'package:smart_wrong_notebook/src/features/capture/presentation/image_crop_screen.dart';
 import 'package:smart_wrong_notebook/src/features/capture/presentation/question_correction_screen.dart';
 import 'package:smart_wrong_notebook/src/features/ocr/presentation/question_save_confirmation_screen.dart';
 import 'package:smart_wrong_notebook/src/features/ocr/presentation/question_split_confirmation_screen.dart';
@@ -77,6 +79,12 @@ GoRouter buildRouter(SettingsRepository settingsRepo) {
           ),
         ],
       ),
+      GoRoute(
+          path: '/capture/camera',
+          pageBuilder: (_, __) => _buildPage(const CameraCaptureCropScreen())),
+      GoRoute(
+          path: '/capture/crop',
+          pageBuilder: (_, __) => _buildPage(const ImageCropScreen())),
       GoRoute(
           path: '/capture/correction',
           pageBuilder: (_, __) => _buildPage(const QuestionCorrectionScreen())),

@@ -18,12 +18,22 @@ class _TestSettingsRepository implements SettingsRepository {
 }
 
 void main() {
-  test('router includes capture split confirmation route', () {
+  test('router includes capture camera, crop, and split confirmation routes',
+      () {
     final router = buildRouter(_TestSettingsRepository());
     addTearDown(router.dispose);
 
     expect(
-      () => router.configuration.findMatch(Uri.parse('/capture/split-confirmation')),
+      () => router.configuration.findMatch(Uri.parse('/capture/camera')),
+      returnsNormally,
+    );
+    expect(
+      () => router.configuration.findMatch(Uri.parse('/capture/crop')),
+      returnsNormally,
+    );
+    expect(
+      () => router.configuration
+          .findMatch(Uri.parse('/capture/split-confirmation')),
       returnsNormally,
     );
   });

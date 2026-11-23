@@ -28,6 +28,7 @@ import 'package:smart_wrong_notebook/src/domain/models/question_record.dart';
 import 'package:smart_wrong_notebook/src/domain/models/question_split_session.dart';
 import 'package:smart_wrong_notebook/src/domain/models/review_log.dart';
 import 'package:smart_wrong_notebook/src/domain/models/subject.dart';
+import 'package:smart_wrong_notebook/src/features/capture/application/camera_capture_session.dart';
 
 // --- Repository providers (default implementations) ---
 
@@ -194,6 +195,12 @@ final Provider<NotificationService> notificationServiceProvider =
 final Provider<CaptureService> captureServiceProvider =
     Provider<CaptureService>((ref) {
   return CaptureService(storage: ref.read(imageStorageServiceProvider));
+});
+
+final Provider<CameraCaptureSessionFactory>
+    cameraCaptureSessionFactoryProvider =
+    Provider<CameraCaptureSessionFactory>((ref) {
+  return PluginCameraCaptureSession.new;
 });
 
 // --- Current question flow ---
