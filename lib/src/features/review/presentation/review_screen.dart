@@ -268,6 +268,8 @@ class _ReviewQuestionList extends StatelessWidget {
                 batchLabel: _batchLabel(q, batchGroups),
                 onOpen: () {
                   ref.read(currentQuestionProvider.notifier).state = q;
+                  ref.read(questionDetailReturnRouteProvider.notifier).state =
+                      '/review';
                   context.go('/notebook/question/${q.id}');
                 },
               ))

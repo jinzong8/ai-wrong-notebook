@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:smart_wrong_notebook/src/app/providers.dart';
+import 'package:smart_wrong_notebook/src/common/widgets/app_back_scope.dart';
 
 class QuestionCorrectionScreen extends ConsumerWidget {
   const QuestionCorrectionScreen({super.key});
@@ -13,56 +14,59 @@ class QuestionCorrectionScreen extends ConsumerWidget {
     final current = ref.watch(currentQuestionProvider);
     final imagePath = current?.imagePath;
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('题目预览'),
-        leading: IconButton(
-          icon: const Icon(CupertinoIcons.chevron_left),
-          onPressed: () => context.go('/'),
-        ),
-      ),
-      body: Column(
-        children: <Widget>[
-          Expanded(
-            child: imagePath != null && File(imagePath).existsSync()
-                ? Center(
-                    child: InteractiveViewer(
-                      minScale: 0.5,
-                      maxScale: 4.0,
-                      child: Image.file(File(imagePath), fit: BoxFit.contain),
-                    ),
-                  )
-                : Center(
-                    child: Text(
-                      '未选择图片',
-                      style: TextStyle(
-                          fontSize: 14,
-                          color:
-                              Theme.of(context).colorScheme.onSurfaceVariant),
-                    ),
-                  ),
+    return AppBackScope(
+      onBack: () => context.go('/'),
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('题目预览'),
+          leading: IconButton(
+            icon: const Icon(CupertinoIcons.chevron_left),
+            onPressed: () => context.go('/'),
           ),
-        ],
-      ),
-      bottomNavigationBar: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Row(
-            children: <Widget>[
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: () => context.go('/capture/crop'),
-                  child: const Text('重新框选'),
+        ),
+        body: Column(
+          children: <Widget>[
+            Expanded(
+              child: imagePath != null && File(imagePath).existsSync()
+                  ? Center(
+                      child: InteractiveViewer(
+                        minScale: 0.5,
+                        maxScale: 4.0,
+                        child: Image.file(File(imagePath), fit: BoxFit.contain),
+                      ),
+                    )
+                  : Center(
+                      child: Text(
+                        '未选择图片',
+                        style: TextStyle(
+                            fontSize: 14,
+                            color:
+                                Theme.of(context).colorScheme.onSurfaceVariant),
+                      ),
+                    ),
+            ),
+          ],
+        ),
+        bottomNavigationBar: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: <Widget>[
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => context.go('/capture/crop'),
+                    child: const Text('重新框选'),
+                  ),
                 ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: FilledButton(
-                  onPressed: () => context.go('/analysis/loading'),
-                  child: const Text('开始分析'),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: FilledButton(
+                    onPressed: () => context.go('/analysis/loading'),
+                    child: const Text('开始分析'),
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

@@ -18,142 +18,184 @@ class HomeScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final p = EditorialPalette.of(context);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final questionsAsync = ref.watch(questionListProvider);
     final dueAsync = ref.watch(dueReviewProvider);
     final analysisTasksAsync = ref.watch(backgroundAnalysisTasksProvider);
+    final now = DateTime.now();
+    final todayNewCount = questionsAsync.valueOrNull
+            ?.where((q) =>
+                q.createdAt.year == now.year &&
+                q.createdAt.month == now.month &&
+                q.createdAt.day == now.day)
+            .length ??
+        0;
 
     return ColoredBox(
       color: p.canvas,
       child: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
+        bottom: false,
+        child: Stack(
           children: <Widget>[
-            EditorialCard(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Row(
-                    children: <Widget>[
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: <Widget>[
-                            Text(
-                              '开始拍错题',
-                              style: TextStyle(
-                                fontSize: 21,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: -0.4,
-                                color: p.inkPrimary,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              '拍单题自动存入错题本，多题自动拆分保存',
-                              style: TextStyle(
-                                fontSize: 12.5,
-                                color: p.inkSecondary,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      Container(
-                        width: 42,
-                        height: 42,
-                        decoration: BoxDecoration(
-                          color: p.cobaltTint,
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Icon(
-                          CupertinoIcons.viewfinder,
-                          size: 21,
-                          color: p.cobalt,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  FilledButton.icon(
-                    onPressed: () => openCameraCaptureFlow(context, ref),
-                    icon: const Icon(CupertinoIcons.camera, size: 19),
-                    label: const Text('拍照录题'),
-                    style: FilledButton.styleFrom(
-                      minimumSize: const Size(double.infinity, 52),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 16),
-            analysisTasksAsync.when(
-              data: (tasks) {
-                if (tasks.isEmpty) return const SizedBox.shrink();
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 16),
-                  child: BackgroundAnalysisSection(
-                    tasks: tasks,
-                    onOpenResult: (task) {
-                      final result = task.resultQuestion;
-                      if (result == null) return;
-                      ref.read(currentQuestionProvider.notifier).state = result;
-                      context.go('/analysis/result');
-                    },
-                    onRetry: (task) => _retryTask(context, ref, task),
-                    onDelete: (task) => _deleteTask(context, ref, task),
-                  ),
-                );
-              },
-              loading: () => const SizedBox.shrink(),
-              error: (_, __) => const SizedBox.shrink(),
-            ),
-            dueAsync.when(
-              data: (due) => due.isNotEmpty
-                  ? Padding(
-                      padding: const EdgeInsets.only(bottom: 18),
-                      child: _ReviewBanner(
-                        count: due.length,
-                        onTap: () => context.go('/review'),
-                      ),
-                    )
-                  : const SizedBox.shrink(),
-              loading: () => const SizedBox.shrink(),
-              error: (_, __) => const SizedBox.shrink(),
-            ),
-            Text('学习统计', style: Theme.of(context).textTheme.titleLarge),
-            const SizedBox(height: 12),
-            RepaintBoundary(
-              child: questionsAsync.when(
-                data: (questions) =>
-                    _buildStatsSection(context, ref, questions, p),
-                loading: () => const _StatsGridSkeleton(),
-                error: (e, _) => Text('加载失败: $e'),
-              ),
-            ),
-            const SizedBox(height: 22),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            ListView(
+              padding: const EdgeInsets.fromLTRB(20, 14, 20, 108),
               children: <Widget>[
-                Text('最近新增', style: Theme.of(context).textTheme.titleLarge),
-                TextButton(
-                  onPressed: () => context.go('/notebook'),
-                  child: const Text('查看全部'),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: <Widget>[
+                    Expanded(
+                      child: Text(
+                        'AI错题本',
+                        style: TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: -0.5,
+                          color: p.inkPrimary,
+                        ),
+                      ),
+                    ),
+                    if (todayNewCount > 0)
+                      EditorialPill(
+                        label: '今日 +$todayNewCount',
+                        backgroundColor: p.cobaltTint,
+                        textColor: p.cobalt,
+                        icon: CupertinoIcons.sparkles,
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                analysisTasksAsync.when(
+                  data: (tasks) {
+                    if (tasks.isEmpty) return const SizedBox.shrink();
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 16),
+                      child: BackgroundAnalysisSection(
+                        tasks: tasks,
+                        onOpenResult: (task) {
+                          final result = task.resultQuestion;
+                          if (result == null) return;
+                          ref.read(currentQuestionProvider.notifier).state =
+                              result;
+                          context.go('/analysis/result');
+                        },
+                        onRetry: (task) => _retryTask(context, ref, task),
+                        onDelete: (task) => _deleteTask(context, ref, task),
+                      ),
+                    );
+                  },
+                  loading: () => const SizedBox.shrink(),
+                  error: (_, __) => const SizedBox.shrink(),
+                ),
+                dueAsync.when(
+                  data: (due) => due.isNotEmpty
+                      ? Padding(
+                          padding: const EdgeInsets.only(bottom: 18),
+                          child: _ReviewBanner(
+                            count: due.length,
+                            onTap: () => context.go('/review'),
+                          ),
+                        )
+                      : const SizedBox.shrink(),
+                  loading: () => const SizedBox.shrink(),
+                  error: (_, __) => const SizedBox.shrink(),
+                ),
+                Text('学习统计', style: Theme.of(context).textTheme.titleLarge),
+                const SizedBox(height: 12),
+                RepaintBoundary(
+                  child: questionsAsync.when(
+                    data: (questions) =>
+                        _buildStatsSection(context, ref, questions, p),
+                    loading: () => const _StatsGridSkeleton(),
+                    error: (e, _) => Text('加载失败: $e'),
+                  ),
+                ),
+                const SizedBox(height: 22),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: <Widget>[
+                    Text('最近新增', style: Theme.of(context).textTheme.titleLarge),
+                    TextButton(
+                      onPressed: () => context.go('/notebook'),
+                      child: const Text('查看全部'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                questionsAsync.when(
+                  data: (questions) {
+                    final ordered = [...questions]
+                      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+                    return _RecentList(
+                      questions: ordered.take(5).toList(),
+                      ref: ref,
+                    );
+                  },
+                  loading: () =>
+                      const Center(child: CircularProgressIndicator()),
+                  error: (e, _) => Text('加载失败: $e'),
                 ),
               ],
             ),
-            const SizedBox(height: 8),
-            questionsAsync.when(
-              data: (questions) {
-                final ordered = [...questions]
-                  ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-                return _RecentList(
-                  questions: ordered.take(5).toList(),
-                  ref: ref,
-                );
-              },
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (e, _) => Text('加载失败: $e'),
+            // Soft bottom fade veil so scrolled cards glide behind the pinned CTA
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              height: 92,
+              child: IgnorePointer(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: <Color>[
+                        p.canvas.withValues(alpha: 0),
+                        p.canvas.withValues(alpha: 0.92),
+                        p.canvas,
+                      ],
+                      stops: const <double>[0.0, 0.55, 1.0],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            // Thumb-zone pinned primary CTA directly above the bottom TabBar
+            Positioned(
+              left: 20,
+              right: 20,
+              bottom: 14,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(28),
+                  boxShadow: <BoxShadow>[
+                    BoxShadow(
+                      color: p.cobalt.withValues(alpha: isDark ? 0.28 : 0.26),
+                      blurRadius: 18,
+                      offset: const Offset(0, 6),
+                    ),
+                  ],
+                ),
+                child: FilledButton.icon(
+                  key: const Key('home-capture-cta'),
+                  onPressed: () => openCameraCaptureFlow(
+                    context,
+                    ref,
+                    returnRoute: '/',
+                  ),
+                  icon: const Icon(CupertinoIcons.camera_fill, size: 20),
+                  label: const Text('拍照录题'),
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size(double.infinity, 54),
+                    shape: const StadiumBorder(),
+                    elevation: 0,
+                    textStyle: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.2,
+                    ),
+                  ),
+                ),
+              ),
             ),
           ],
         ),
@@ -415,6 +457,7 @@ class _RecentList extends StatelessWidget {
           question: q,
           onTap: () {
             ref.read(currentQuestionProvider.notifier).state = q;
+            ref.read(questionDetailReturnRouteProvider.notifier).state = '/';
             context.go('/notebook/question/${q.id}');
           },
         );

@@ -63,7 +63,11 @@ class _NotebookScreenState extends ConsumerState<NotebookScreen> {
         actions: [
           IconButton(
             icon: const Icon(CupertinoIcons.camera),
-            onPressed: () => openCameraCaptureFlow(context, ref),
+            onPressed: () => openCameraCaptureFlow(
+              context,
+              ref,
+              returnRoute: '/notebook',
+            ),
             tooltip: '添加错题',
           ),
         ],
@@ -230,6 +234,10 @@ class _NotebookScreenState extends ConsumerState<NotebookScreen> {
                           onTap: () {
                             ref.read(currentQuestionProvider.notifier).state =
                                 q;
+                            ref
+                                .read(
+                                    questionDetailReturnRouteProvider.notifier)
+                                .state = '/notebook';
                             context.go('/notebook/question/${q.id}');
                           },
                           onDelete: () => _confirmDelete(context, ref, q),

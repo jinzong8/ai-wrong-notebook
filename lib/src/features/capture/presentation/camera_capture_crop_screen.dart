@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:smart_wrong_notebook/src/app/providers.dart';
+import 'package:smart_wrong_notebook/src/common/widgets/app_back_scope.dart';
 import 'package:smart_wrong_notebook/src/domain/models/content_status.dart';
 import 'package:smart_wrong_notebook/src/domain/models/question_record.dart';
 import 'package:smart_wrong_notebook/src/domain/models/subject.dart';
@@ -21,7 +22,11 @@ import 'package:uuid/uuid.dart';
 
 /// Checks AI service configuration and navigates straight into the integrated
 /// camera + free-crop screen, skipping any intermediate camera/gallery modal.
-Future<void> openCameraCaptureFlow(BuildContext context, WidgetRef ref) async {
+Future<void> openCameraCaptureFlow(
+  BuildContext context,
+  WidgetRef ref, {
+  String returnRoute = '/',
+}) async {
   final router = GoRouter.maybeOf(context);
   final messenger = ScaffoldMessenger.maybeOf(context);
   final hasScaffold = Scaffold.maybeOf(context) != null;
@@ -50,6 +55,7 @@ Future<void> openCameraCaptureFlow(BuildContext context, WidgetRef ref) async {
     return;
   }
 
+  ref.read(captureReturnRouteProvider.notifier).state = returnRoute;
   router?.go('/capture/camera');
 }
 
@@ -479,9 +485,8 @@ class _CameraCaptureCropScreenState
               _fineRotationDegrees.abs() < 0.05 &&
               isEffectivelyFullCrop(_cropRect));
       if (useOriginal) {
-        savedPath = _capturedFileOwnedTemp
-            ? await storage.saveImage(file)
-            : file.path;
+        savedPath =
+            _capturedFileOwnedTemp ? await storage.saveImage(file) : file.path;
       } else {
         final jpgBytes = await cropAndEncodeJpg(
           sourceImage: image,
@@ -536,100 +541,113 @@ class _CameraCaptureCropScreenState
     const barBg = Color(0xFF161B22);
     final isCropping = _stage == _CaptureStage.cropping;
 
-    return Scaffold(
-      backgroundColor: surfaceBg,
-      appBar: AppBar(
-        toolbarHeight: 48,
-        backgroundColor: barBg,
-        foregroundColor: Colors.white,
-        iconTheme: const IconThemeData(color: Colors.white),
-        actionsIconTheme: const IconThemeData(color: Colors.white),
-        systemOverlayStyle: SystemUiOverlayStyle.light,
-        elevation: 0,
-        title: Text(
-          isCropping ? '框选题目' : '拍照框选',
-          style: const TextStyle(color: Colors.white),
-        ),
-        leading: isCropping
-            ? TextButton.icon(
-                key: const Key('crop-retake-button'),
-                onPressed: _saving ? null : _retake,
-                style: TextButton.styleFrom(
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.only(left: 8),
+    return AppBackScope(
+      enabled: isCropping ? !_saving : !_capturing,
+      preferCustomBack: isCropping,
+      onBack: () {
+        if (isCropping) {
+          _retake();
+        } else {
+          context.go(ref.read(captureReturnRouteProvider));
+        }
+      },
+      child: Scaffold(
+        backgroundColor: surfaceBg,
+        appBar: AppBar(
+          toolbarHeight: 48,
+          backgroundColor: barBg,
+          foregroundColor: Colors.white,
+          iconTheme: const IconThemeData(color: Colors.white),
+          actionsIconTheme: const IconThemeData(color: Colors.white),
+          systemOverlayStyle: SystemUiOverlayStyle.light,
+          elevation: 0,
+          title: Text(
+            isCropping ? '框选题目' : '拍照框选',
+            style: const TextStyle(color: Colors.white),
+          ),
+          leading: isCropping
+              ? TextButton.icon(
+                  key: const Key('crop-retake-button'),
+                  onPressed: _saving ? null : _retake,
+                  style: TextButton.styleFrom(
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.only(left: 8),
+                  ),
+                  icon: const Icon(
+                    CupertinoIcons.camera,
+                    size: 17,
+                    color: Colors.white,
+                  ),
+                  label: const Text('重拍'),
+                )
+              : IconButton(
+                  key: const Key('camera-back-button'),
+                  tooltip: '返回',
+                  icon: const Icon(CupertinoIcons.xmark, color: Colors.white),
+                  onPressed: _capturing
+                      ? null
+                      : () => context.go(ref.read(captureReturnRouteProvider)),
                 ),
-                icon: const Icon(
-                  CupertinoIcons.camera,
-                  size: 17,
-                  color: Colors.white,
-                ),
-                label: const Text('重拍'),
+          leadingWidth: isCropping ? 88 : 56,
+          actions: <Widget>[
+            if (isCropping)
+              TextButton(
+                key: const Key('crop-use-original'),
+                onPressed: _saving ? null : _submitFullOriginal,
+                style: TextButton.styleFrom(foregroundColor: Colors.white70),
+                child: const Text('用原图'),
               )
-            : IconButton(
-                key: const Key('camera-back-button'),
-                tooltip: '返回',
-                icon: const Icon(CupertinoIcons.xmark, color: Colors.white),
-                onPressed: _capturing ? null : () => context.go('/'),
+            else if (_stage == _CaptureStage.preview)
+              IconButton(
+                key: const Key('camera-flash-button'),
+                tooltip: _flashMode.label,
+                icon: Icon(_flashIcon(_flashMode), color: Colors.white),
+                onPressed: _capturing ? null : _cycleFlash,
               ),
-        leadingWidth: isCropping ? 88 : 56,
-        actions: <Widget>[
-          if (isCropping)
-            TextButton(
-              key: const Key('crop-use-original'),
-              onPressed: _saving ? null : _submitFullOriginal,
-              style: TextButton.styleFrom(foregroundColor: Colors.white70),
-              child: const Text('用原图'),
-            )
-          else if (_stage == _CaptureStage.preview)
-            IconButton(
-              key: const Key('camera-flash-button'),
-              tooltip: _flashMode.label,
-              icon: Icon(_flashIcon(_flashMode), color: Colors.white),
-              onPressed: _capturing ? null : _cycleFlash,
-            ),
-        ],
-      ),
-      body: Column(
-        children: <Widget>[
-          Expanded(
-            child: Stack(
-              fit: StackFit.expand,
-              children: <Widget>[
-                _buildStageContent(),
-                if (_stage == _CaptureStage.preview ||
-                    _stage == _CaptureStage.cropping)
-                  Positioned(
-                    top: 10,
-                    left: 16,
-                    right: 16,
-                    child: IgnorePointer(
-                      child: Center(
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 5,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.black.withValues(alpha: 0.48),
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                          child: Text(
-                            _buildHintText(isCropping),
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: Colors.white70,
+          ],
+        ),
+        body: Column(
+          children: <Widget>[
+            Expanded(
+              child: Stack(
+                fit: StackFit.expand,
+                children: <Widget>[
+                  _buildStageContent(),
+                  if (_stage == _CaptureStage.preview ||
+                      _stage == _CaptureStage.cropping)
+                    Positioned(
+                      top: 10,
+                      left: 16,
+                      right: 16,
+                      child: IgnorePointer(
+                        child: Center(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 5,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withValues(alpha: 0.48),
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            child: Text(
+                              _buildHintText(isCropping),
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: Colors.white70,
+                              ),
                             ),
                           ),
                         ),
                       ),
                     ),
-                  ),
-              ],
+                ],
+              ),
             ),
-          ),
-          _buildBottomBar(barBg),
-        ],
+            _buildBottomBar(barBg),
+          ],
+        ),
       ),
     );
   }
@@ -937,9 +955,8 @@ class _CameraCaptureCropScreenState
                 key: const Key('camera-gallery-button'),
                 icon: CupertinoIcons.photo,
                 label: '相册',
-                onPressed: _capturing
-                    ? null
-                    : () => _pickExternal(fromCamera: false),
+                onPressed:
+                    _capturing ? null : () => _pickExternal(fromCamera: false),
               ),
               GestureDetector(
                 key: const Key('camera-shutter-button'),
@@ -964,9 +981,8 @@ class _CameraCaptureCropScreenState
                 key: const Key('camera-system-button'),
                 icon: CupertinoIcons.camera_viewfinder,
                 label: '系统相机',
-                onPressed: _capturing
-                    ? null
-                    : () => _pickExternal(fromCamera: true),
+                onPressed:
+                    _capturing ? null : () => _pickExternal(fromCamera: true),
               ),
             ],
           ),

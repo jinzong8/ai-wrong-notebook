@@ -208,6 +208,16 @@ final Provider<CameraCaptureSessionFactory>
 final StateProvider<QuestionRecord?> currentQuestionProvider =
     StateProvider<QuestionRecord?>((ref) => null);
 
+/// Route to return to when leaving [QuestionDetailScreen] via AppBar back or
+/// Android system back gesture. Defaults to `/notebook`.
+final StateProvider<String> questionDetailReturnRouteProvider =
+    StateProvider<String>((ref) => '/notebook');
+
+/// Route to return to when leaving the capture flow (`/capture/camera` or
+/// `/capture/crop`). Defaults to `/`.
+final StateProvider<String> captureReturnRouteProvider =
+    StateProvider<String>((ref) => '/');
+
 enum PracticeContextSource { analysis, notebook }
 
 class PracticeContext {

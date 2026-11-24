@@ -22,9 +22,13 @@ import 'package:smart_wrong_notebook/src/features/analysis/presentation/analysis
 import 'package:smart_wrong_notebook/src/features/analysis/presentation/analysis_result_screen.dart';
 import 'package:smart_wrong_notebook/src/features/analysis/presentation/question_text_correction_screen.dart';
 import 'package:smart_wrong_notebook/src/features/analysis/presentation/exercise_practice_screen.dart';
+import 'package:smart_wrong_notebook/src/common/widgets/app_back_scope.dart';
 import 'package:smart_wrong_notebook/src/data/repositories/settings_repository.dart';
 
-GoRouter buildRouter(SettingsRepository settingsRepo) {
+GoRouter buildRouter(
+  SettingsRepository settingsRepo, {
+  VoidCallback? onExitApp,
+}) {
   return GoRouter(
     initialLocation: '/',
     routes: <RouteBase>[
@@ -34,7 +38,10 @@ GoRouter buildRouter(SettingsRepository settingsRepo) {
       StatefulShellRoute.indexedStack(
         builder: (BuildContext context, GoRouterState state,
             StatefulNavigationShell navigationShell) {
-          return ScaffoldWithNavBar(navigationShell: navigationShell);
+          return ScaffoldWithNavBar(
+            navigationShell: navigationShell,
+            onExitApp: onExitApp,
+          );
         },
         branches: <StatefulShellBranch>[
           StatefulShellBranch(
@@ -138,34 +145,44 @@ CustomTransitionPage _buildPage(Widget child) {
           end: Offset.zero,
         ).animate(
             CurvedAnimation(parent: animation, curve: Curves.easeOutCubic)),
+        child: child,
       );
     },
   );
 }
 
 class ScaffoldWithNavBar extends StatelessWidget {
-  const ScaffoldWithNavBar({required this.navigationShell, super.key});
+  const ScaffoldWithNavBar({
+    required this.navigationShell,
+    this.onExitApp,
+    super.key,
+  });
 
   final StatefulNavigationShell navigationShell;
+  final VoidCallback? onExitApp;
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: navigationShell,
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: navigationShell.currentIndex,
-        onDestinationSelected: (int index) => navigationShell.goBranch(index),
-        destinations: const <NavigationDestination>[
-          NavigationDestination(
-              icon: Icon(CupertinoIcons.house), label: AppStrings.homeTab),
-          NavigationDestination(
-              icon: Icon(CupertinoIcons.book), label: AppStrings.notebookTab),
-          NavigationDestination(
-              icon: Icon(CupertinoIcons.arrow_2_circlepath),
-              label: AppStrings.reviewTab),
-          NavigationDestination(
-              icon: Icon(CupertinoIcons.gear), label: AppStrings.settingsTab),
-        ],
+    return TabShellBackScope(
+      navigationShell: navigationShell,
+      onExitApp: onExitApp,
+      child: Scaffold(
+        body: navigationShell,
+        bottomNavigationBar: NavigationBar(
+          selectedIndex: navigationShell.currentIndex,
+          onDestinationSelected: (int index) => navigationShell.goBranch(index),
+          destinations: const <NavigationDestination>[
+            NavigationDestination(
+                icon: Icon(CupertinoIcons.house), label: AppStrings.homeTab),
+            NavigationDestination(
+                icon: Icon(CupertinoIcons.book), label: AppStrings.notebookTab),
+            NavigationDestination(
+                icon: Icon(CupertinoIcons.arrow_2_circlepath),
+                label: AppStrings.reviewTab),
+            NavigationDestination(
+                icon: Icon(CupertinoIcons.gear), label: AppStrings.settingsTab),
+          ],
+        ),
       ),
     );
   }

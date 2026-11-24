@@ -57,63 +57,76 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     final colorScheme = Theme.of(context).colorScheme;
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    return Scaffold(
-      body: SafeArea(
-        child: Column(
-          children: <Widget>[
-            Align(
-              alignment: Alignment.topRight,
-              child: TextButton(
-                onPressed: _finish,
-                child: Text('跳过',
-                    style: TextStyle(color: colorScheme.onSurfaceVariant)),
+    return PopScope<Object?>(
+      canPop: _currentPage == 0,
+      onPopInvokedWithResult: (bool didPop, Object? _) {
+        if (didPop) return;
+        if (_currentPage > 0) {
+          _controller.previousPage(
+            duration: const Duration(milliseconds: 250),
+            curve: Curves.easeOut,
+          );
+        }
+      },
+      child: Scaffold(
+        body: SafeArea(
+          child: Column(
+            children: <Widget>[
+              Align(
+                alignment: Alignment.topRight,
+                child: TextButton(
+                  onPressed: _finish,
+                  child: Text('跳过',
+                      style: TextStyle(color: colorScheme.onSurfaceVariant)),
+                ),
               ),
-            ),
-            Expanded(
-              child: PageView.builder(
-                controller: _controller,
-                itemCount: _pages.length,
-                onPageChanged: (i) => setState(() => _currentPage = i),
-                itemBuilder: (_, i) => _pages[i],
+              Expanded(
+                child: PageView.builder(
+                  controller: _controller,
+                  itemCount: _pages.length,
+                  onPageChanged: (i) => setState(() => _currentPage = i),
+                  itemBuilder: (_, i) => _pages[i],
+                ),
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 20),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: List.generate(
-                    _pages.length,
-                    (i) => Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 4),
-                          child: AnimatedContainer(
-                            duration: const Duration(milliseconds: 200),
-                            width: _currentPage == i ? 20 : 8,
-                            height: 8,
-                            decoration: BoxDecoration(
-                              color: _currentPage == i
-                                  ? colorScheme.primary
-                                  : colorScheme.onSurfaceVariant
-                                      .withValues(alpha: isDark ? 0.35 : 0.25),
-                              borderRadius: BorderRadius.circular(4),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 20),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: List.generate(
+                      _pages.length,
+                      (i) => Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 4),
+                            child: AnimatedContainer(
+                              duration: const Duration(milliseconds: 200),
+                              width: _currentPage == i ? 20 : 8,
+                              height: 8,
+                              decoration: BoxDecoration(
+                                color: _currentPage == i
+                                    ? colorScheme.primary
+                                    : colorScheme.onSurfaceVariant.withValues(
+                                        alpha: isDark ? 0.35 : 0.25),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
                             ),
-                          ),
-                        )),
+                          )),
+                ),
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(32, 0, 32, 32),
-              child: FilledButton(
-                onPressed: _currentPage < _pages.length - 1
-                    ? () => _controller.nextPage(
-                        duration: const Duration(milliseconds: 300),
-                        curve: Curves.easeInOut)
-                    : _finish,
-                style: FilledButton.styleFrom(
-                    minimumSize: const Size(double.infinity, 52)),
-                child: Text(_currentPage < _pages.length - 1 ? '下一步' : '开始使用'),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(32, 0, 32, 32),
+                child: FilledButton(
+                  onPressed: _currentPage < _pages.length - 1
+                      ? () => _controller.nextPage(
+                          duration: const Duration(milliseconds: 300),
+                          curve: Curves.easeInOut)
+                      : _finish,
+                  style: FilledButton.styleFrom(
+                      minimumSize: const Size(double.infinity, 52)),
+                  child:
+                      Text(_currentPage < _pages.length - 1 ? '下一步' : '开始使用'),
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

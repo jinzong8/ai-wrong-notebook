@@ -49,7 +49,8 @@ void main() {
       ));
       await tester.pumpAndSettle();
 
-      expect(find.text('开始拍错题'), findsOneWidget);
+      expect(find.text('AI错题本'), findsOneWidget);
+      expect(find.text('拍照录题'), findsOneWidget);
       expect(find.text('最近新增'), findsOneWidget);
     });
 

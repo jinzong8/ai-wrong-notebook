@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:smart_wrong_notebook/src/app/providers.dart';
+import 'package:smart_wrong_notebook/src/common/widgets/app_back_scope.dart';
 import 'package:smart_wrong_notebook/src/common/widgets/editorial_surface.dart';
 import 'package:smart_wrong_notebook/src/data/remote/ai/ai_analysis_service.dart';
 import 'package:smart_wrong_notebook/src/domain/models/ai_conversation_message.dart';
@@ -51,13 +52,23 @@ class QuestionDetailScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final current = ref.watch(currentQuestionProvider);
+    final returnRoute = ref.watch(questionDetailReturnRouteProvider);
     final p = EditorialPalette.of(context);
 
     if (current == null) {
-      return Scaffold(
-        backgroundColor: p.canvas,
-        appBar: AppBar(title: const Text('错题详情')),
-        body: const Center(child: Text('未找到该错题')),
+      return AppBackScope(
+        onBack: () => context.go(returnRoute),
+        child: Scaffold(
+          backgroundColor: p.canvas,
+          appBar: AppBar(
+            title: const Text('错题详情'),
+            leading: IconButton(
+              icon: const Icon(CupertinoIcons.chevron_left),
+              onPressed: () => context.go(returnRoute),
+            ),
+          ),
+          body: const Center(child: Text('未找到该错题')),
+        ),
       );
     }
 
@@ -68,398 +79,402 @@ class QuestionDetailScreen extends ConsumerWidget {
     final isNeedsReview =
         result?.visualAssumptionStatus == VisualAssumptionStatus.needsReview;
 
-    return Scaffold(
-      backgroundColor: p.canvas,
-      appBar: AppBar(
-        title: const Text('错题详情'),
-        leading: IconButton(
-          icon: const Icon(CupertinoIcons.chevron_left),
-          onPressed: () => context.go('/notebook'),
-        ),
-        actions: <Widget>[
-          IconButton(
-            tooltip: '编辑题目',
-            icon: const Icon(CupertinoIcons.pencil, size: 20),
-            onPressed: () => _editQuestion(context, ref, current),
+    return AppBackScope(
+      onBack: () => context.go(returnRoute),
+      child: Scaffold(
+        backgroundColor: p.canvas,
+        appBar: AppBar(
+          title: const Text('错题详情'),
+          leading: IconButton(
+            icon: const Icon(CupertinoIcons.chevron_left),
+            onPressed: () => context.go(returnRoute),
           ),
-          PopupMenuButton<String>(
-            onSelected: (value) {
-              if (value == 'reanalyze') {
-                _openTextCorrection(context, ref, current);
-              } else if (value == 'delete') {
-                _confirmDelete(context, ref, current);
-              }
-            },
-            itemBuilder: (_) => <PopupMenuEntry<String>>[
-              PopupMenuItem<String>(
-                value: 'reanalyze',
-                child: Row(
-                  children: <Widget>[
-                    Icon(CupertinoIcons.arrow_clockwise,
-                        color: p.cobalt, size: 18),
-                    const SizedBox(width: 8),
-                    const Text('核对题干后重新解析'),
-                  ],
+          actions: <Widget>[
+            IconButton(
+              tooltip: '编辑题目',
+              icon: const Icon(CupertinoIcons.pencil, size: 20),
+              onPressed: () => _editQuestion(context, ref, current),
+            ),
+            PopupMenuButton<String>(
+              onSelected: (value) {
+                if (value == 'reanalyze') {
+                  _openTextCorrection(context, ref, current);
+                } else if (value == 'delete') {
+                  _confirmDelete(context, ref, current);
+                }
+              },
+              itemBuilder: (_) => <PopupMenuEntry<String>>[
+                PopupMenuItem<String>(
+                  value: 'reanalyze',
+                  child: Row(
+                    children: <Widget>[
+                      Icon(CupertinoIcons.arrow_clockwise,
+                          color: p.cobalt, size: 18),
+                      const SizedBox(width: 8),
+                      const Text('核对题干后重新解析'),
+                    ],
+                  ),
                 ),
-              ),
-              const PopupMenuDivider(height: 1),
-              const PopupMenuItem<String>(
-                value: 'delete',
-                child: Row(
-                  children: <Widget>[
-                    Icon(CupertinoIcons.trash, color: Colors.red, size: 18),
-                    SizedBox(width: 8),
-                    Text('删除', style: TextStyle(color: Colors.red)),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
-        children: <Widget>[
-          // 统一元数据卡片：科目 | AI识别 | 掌握状态 | 标签
-          EditorialCard(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 6,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: <Widget>[
-                    EditorialPill(
-                      label: current.subject.label,
-                      backgroundColor: p.cobaltTint,
-                      textColor: p.cobalt,
-                    ),
-                    if (result?.subject != null)
-                      EditorialPill(
-                        label: 'AI识别',
-                        backgroundColor: p.emeraldTint,
-                        textColor: p.emerald,
-                      ),
-                    EditorialPill(
-                      label: _masteryLabel(current.masteryLevel),
-                      backgroundColor:
-                          masteryColor.withValues(alpha: p.isDark ? 0.16 : 0.11),
-                      textColor: masteryColor,
-                    ),
-                    if (_batchLabel(current) != null)
-                      EditorialPill(
-                        label: _batchLabel(current)!,
-                        backgroundColor: p.subtle,
-                        textColor: p.inkSecondary,
-                      ),
-                  ],
-                ),
-                if (current.aiTags.isNotEmpty) ...<Widget>[
-                  const SizedBox(height: 12),
-                  Text(
-                    'AI标签',
-                    style: TextStyle(
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.w600,
-                      color: p.inkMuted,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    children: current.aiTags
-                        .map((tag) => _TagChip(
-                              label: tag,
-                              bgColor: p.ochreTint,
-                              textColor: p.ochre,
-                            ))
-                        .toList(),
-                  ),
-                ],
-                if (current.customTags.isNotEmpty) ...<Widget>[
-                  const SizedBox(height: 10),
-                  Text(
-                    '自定义标签',
-                    style: TextStyle(
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.w600,
-                      color: p.inkMuted,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    children: current.customTags
-                        .map((t) => _TagChip(
-                              label: t,
-                              bgColor: p.cobaltTint,
-                              textColor: p.cobalt,
-                            ))
-                        .toList(),
-                  ),
-                ],
-                const SizedBox(height: 12),
-                InkWell(
-                  onTap: () => _showAddTagDialog(context, ref, current),
-                  borderRadius: BorderRadius.circular(8),
-                  child: Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: p.subtle,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: p.hairline),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: <Widget>[
-                        Icon(CupertinoIcons.plus,
-                            size: 13, color: p.inkSecondary),
-                        const SizedBox(width: 4),
-                        Text(
-                          '添加标签',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w500,
-                            color: p.inkSecondary,
-                          ),
-                        ),
-                      ],
-                    ),
+                const PopupMenuDivider(height: 1),
+                const PopupMenuItem<String>(
+                  value: 'delete',
+                  child: Row(
+                    children: <Widget>[
+                      Icon(CupertinoIcons.trash, color: Colors.red, size: 18),
+                      SizedBox(width: 8),
+                      Text('删除', style: TextStyle(color: Colors.red)),
+                    ],
                   ),
                 ),
               ],
             ),
-          ),
-          if (batchGroup != null) ...<Widget>[
-            const SizedBox(height: 12),
-            _BatchSiblingCard(
-              current: current,
-              group: batchGroup,
-              onSelect: (question) {
-                ref.read(currentQuestionProvider.notifier).state = question;
-                context.go('/notebook/question/${question.id}');
-              },
-            ),
           ],
-          if (result == null) ...<Widget>[
-            const SizedBox(height: 16),
+        ),
+        body: ListView(
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
+          children: <Widget>[
+            // 统一元数据卡片：科目 | AI识别 | 掌握状态 | 标签
             EditorialCard(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                children: <Widget>[
-                  Icon(
-                    CupertinoIcons.sparkles,
-                    size: 36,
-                    color: p.inkMuted,
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                    '暂无 AI 解析结果',
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: p.inkPrimary,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  FilledButton.icon(
-                    onPressed: () {
-                      ref.read(currentQuestionProvider.notifier).state =
-                          current;
-                      context.go('/capture/correction');
-                    },
-                    icon: const Icon(CupertinoIcons.camera, size: 17),
-                    label: const Text('去添加'),
-                  ),
-                ],
-              ),
-            ),
-          ],
-          if (result != null) ...<Widget>[
-            const SizedBox(height: 14),
-            // 原题（包含图片和文本）
-            EditorialCard(
-              accentColor: p.cobalt,
+              padding: const EdgeInsets.all(16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  EditorialSectionHeader(
-                    title: '原题',
-                    icon: CupertinoIcons.doc_text,
-                    iconColor: p.cobalt,
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 6,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: <Widget>[
+                      EditorialPill(
+                        label: current.subject.label,
+                        backgroundColor: p.cobaltTint,
+                        textColor: p.cobalt,
+                      ),
+                      if (result?.subject != null)
+                        EditorialPill(
+                          label: 'AI识别',
+                          backgroundColor: p.emeraldTint,
+                          textColor: p.emerald,
+                        ),
+                      EditorialPill(
+                        label: _masteryLabel(current.masteryLevel),
+                        backgroundColor: masteryColor.withValues(
+                            alpha: p.isDark ? 0.16 : 0.11),
+                        textColor: masteryColor,
+                      ),
+                      if (_batchLabel(current) != null)
+                        EditorialPill(
+                          label: _batchLabel(current)!,
+                          backgroundColor: p.subtle,
+                          textColor: p.inkSecondary,
+                        ),
+                    ],
                   ),
-                  const SizedBox(height: 12),
-                  if (current.imagePath.isNotEmpty) ...<Widget>[
-                    EditorialPhotoPreview(
-                      imagePath: current.imagePath,
-                      maxHeight: 144,
-                      onTap: () => _showFullImage(context, current.imagePath),
-                    ),
+                  if (current.aiTags.isNotEmpty) ...<Widget>[
                     const SizedBox(height: 12),
-                  ],
-                  MathContentView(
-                    current.correctedText,
-                    contentFormat: current.contentFormat,
-                    style: TextStyle(
-                      fontSize: 14.5,
-                      color: p.inkPrimary,
-                      height: 1.62,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 12),
-            // 正确答案 / 可能解法
-            EditorialCard(
-              accentColor: isNeedsReview ? p.terracotta : p.emerald,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  EditorialSectionHeader(
-                    title: isNeedsReview ? '可能解法' : '正确答案',
-                    icon: isNeedsReview
-                        ? CupertinoIcons.exclamationmark_triangle
-                        : CupertinoIcons.checkmark_circle,
-                    iconColor: isNeedsReview ? p.terracotta : p.emerald,
-                  ),
-                  const SizedBox(height: 10),
-                  MathContentView(
-                    result.finalAnswer,
-                    style: TextStyle(
-                      fontSize: 15,
-                      color: isNeedsReview ? p.inkPrimary : p.emerald,
-                      fontWeight: FontWeight.w600,
-                      height: 1.55,
-                    ),
-                  ),
-                  if (_consistencyNotice(result) != null) ...<Widget>[
-                    const SizedBox(height: 10),
-                    _ConsistencyNotice(
-                      notice: _consistencyNotice(result)!,
-                    ),
-                  ],
-                  if (_shouldOfferQuestionCorrection(result)) ...<Widget>[
-                    const SizedBox(height: 12),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: OutlinedButton.icon(
-                        onPressed: () =>
-                            _openTextCorrection(context, ref, current),
-                        icon: const Icon(CupertinoIcons.pencil, size: 16),
-                        label: const Text('核对题干后重新解析'),
+                    Text(
+                      'AI标签',
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w600,
+                        color: p.inkMuted,
                       ),
                     ),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: current.aiTags
+                          .map((tag) => _TagChip(
+                                label: tag,
+                                bgColor: p.ochreTint,
+                                textColor: p.ochre,
+                              ))
+                          .toList(),
+                    ),
                   ],
-                ],
-              ),
-            ),
-            const SizedBox(height: 12),
-            // 错因分析
-            EditorialCard(
-              accentColor: p.terracotta,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  EditorialSectionHeader(
-                    title: '错因分析',
-                    icon: CupertinoIcons.exclamationmark_triangle,
-                    iconColor: p.terracotta,
-                  ),
-                  const SizedBox(height: 10),
-                  MathContentView(
-                    result.mistakeReason,
-                    style: TextStyle(
-                      fontSize: 14.5,
-                      color: p.inkPrimary,
-                      height: 1.6,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 12),
-            // 学习建议
-            EditorialCard(
-              accentColor: p.ochre,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  EditorialSectionHeader(
-                    title: '学习建议',
-                    icon: CupertinoIcons.lightbulb,
-                    iconColor: p.ochre,
-                  ),
-                  const SizedBox(height: 10),
-                  MathContentView(
-                    result.studyAdvice,
-                    style: TextStyle(
-                      fontSize: 14.5,
-                      color: p.inkPrimary,
-                      height: 1.6,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            // 知识点
-            if (result.knowledgePoints.isNotEmpty) ...<Widget>[
-              const SizedBox(height: 12),
-              EditorialCard(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    EditorialSectionHeader(
-                      title: '知识点',
-                      icon: CupertinoIcons.bookmark,
-                      iconColor: p.cobalt,
-                    ),
+                  if (current.customTags.isNotEmpty) ...<Widget>[
                     const SizedBox(height: 10),
-                    ...result.knowledgePoints.map((kp) => Container(
-                          width: double.infinity,
-                          margin: const EdgeInsets.only(bottom: 6),
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 11, vertical: 7),
-                          decoration: BoxDecoration(
-                            color: p.subtle,
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: MathContentView(
-                            kp,
+                    Text(
+                      '自定义标签',
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w600,
+                        color: p.inkMuted,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: current.customTags
+                          .map((t) => _TagChip(
+                                label: t,
+                                bgColor: p.cobaltTint,
+                                textColor: p.cobalt,
+                              ))
+                          .toList(),
+                    ),
+                  ],
+                  const SizedBox(height: 12),
+                  InkWell(
+                    onTap: () => _showAddTagDialog(context, ref, current),
+                    borderRadius: BorderRadius.circular(8),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: p.subtle,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: p.hairline),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: <Widget>[
+                          Icon(CupertinoIcons.plus,
+                              size: 13, color: p.inkSecondary),
+                          const SizedBox(width: 4),
+                          Text(
+                            '添加标签',
                             style: TextStyle(
-                              fontSize: 13,
-                              height: 1.45,
+                              fontSize: 12,
                               fontWeight: FontWeight.w500,
-                              color: p.inkPrimary,
+                              color: p.inkSecondary,
                             ),
                           ),
-                        )),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (batchGroup != null) ...<Widget>[
+              const SizedBox(height: 12),
+              _BatchSiblingCard(
+                current: current,
+                group: batchGroup,
+                onSelect: (question) {
+                  ref.read(currentQuestionProvider.notifier).state = question;
+                  context.go('/notebook/question/${question.id}');
+                },
+              ),
+            ],
+            if (result == null) ...<Widget>[
+              const SizedBox(height: 16),
+              EditorialCard(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  children: <Widget>[
+                    Icon(
+                      CupertinoIcons.sparkles,
+                      size: 36,
+                      color: p.inkMuted,
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      '暂无 AI 解析结果',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: p.inkPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    FilledButton.icon(
+                      onPressed: () {
+                        ref.read(currentQuestionProvider.notifier).state =
+                            current;
+                        context.go('/capture/correction');
+                      },
+                      icon: const Icon(CupertinoIcons.camera, size: 17),
+                      label: const Text('去添加'),
+                    ),
                   ],
                 ),
               ),
             ],
-            // 解题步骤
-            if (result.steps.isNotEmpty) ...<Widget>[
+            if (result != null) ...<Widget>[
+              const SizedBox(height: 14),
+              // 原题（包含图片和文本）
+              EditorialCard(
+                accentColor: p.cobalt,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    EditorialSectionHeader(
+                      title: '原题',
+                      icon: CupertinoIcons.doc_text,
+                      iconColor: p.cobalt,
+                    ),
+                    const SizedBox(height: 12),
+                    if (current.imagePath.isNotEmpty) ...<Widget>[
+                      EditorialPhotoPreview(
+                        imagePath: current.imagePath,
+                        maxHeight: 144,
+                        onTap: () => _showFullImage(context, current.imagePath),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    MathContentView(
+                      current.correctedText,
+                      contentFormat: current.contentFormat,
+                      style: TextStyle(
+                        fontSize: 14.5,
+                        color: p.inkPrimary,
+                        height: 1.62,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
               const SizedBox(height: 12),
-              EditorialStepTimeline(steps: result.steps),
+              // 正确答案 / 可能解法
+              EditorialCard(
+                accentColor: isNeedsReview ? p.terracotta : p.emerald,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    EditorialSectionHeader(
+                      title: isNeedsReview ? '可能解法' : '正确答案',
+                      icon: isNeedsReview
+                          ? CupertinoIcons.exclamationmark_triangle
+                          : CupertinoIcons.checkmark_circle,
+                      iconColor: isNeedsReview ? p.terracotta : p.emerald,
+                    ),
+                    const SizedBox(height: 10),
+                    MathContentView(
+                      result.finalAnswer,
+                      style: TextStyle(
+                        fontSize: 15,
+                        color: isNeedsReview ? p.inkPrimary : p.emerald,
+                        fontWeight: FontWeight.w600,
+                        height: 1.55,
+                      ),
+                    ),
+                    if (_consistencyNotice(result) != null) ...<Widget>[
+                      const SizedBox(height: 10),
+                      _ConsistencyNotice(
+                        notice: _consistencyNotice(result)!,
+                      ),
+                    ],
+                    if (_shouldOfferQuestionCorrection(result)) ...<Widget>[
+                      const SizedBox(height: 12),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: OutlinedButton.icon(
+                          onPressed: () =>
+                              _openTextCorrection(context, ref, current),
+                          icon: const Icon(CupertinoIcons.pencil, size: 16),
+                          label: const Text('核对题干后重新解析'),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              // 错因分析
+              EditorialCard(
+                accentColor: p.terracotta,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    EditorialSectionHeader(
+                      title: '错因分析',
+                      icon: CupertinoIcons.exclamationmark_triangle,
+                      iconColor: p.terracotta,
+                    ),
+                    const SizedBox(height: 10),
+                    MathContentView(
+                      result.mistakeReason,
+                      style: TextStyle(
+                        fontSize: 14.5,
+                        color: p.inkPrimary,
+                        height: 1.6,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              // 学习建议
+              EditorialCard(
+                accentColor: p.ochre,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    EditorialSectionHeader(
+                      title: '学习建议',
+                      icon: CupertinoIcons.lightbulb,
+                      iconColor: p.ochre,
+                    ),
+                    const SizedBox(height: 10),
+                    MathContentView(
+                      result.studyAdvice,
+                      style: TextStyle(
+                        fontSize: 14.5,
+                        color: p.inkPrimary,
+                        height: 1.6,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              // 知识点
+              if (result.knowledgePoints.isNotEmpty) ...<Widget>[
+                const SizedBox(height: 12),
+                EditorialCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      EditorialSectionHeader(
+                        title: '知识点',
+                        icon: CupertinoIcons.bookmark,
+                        iconColor: p.cobalt,
+                      ),
+                      const SizedBox(height: 10),
+                      ...result.knowledgePoints.map((kp) => Container(
+                            width: double.infinity,
+                            margin: const EdgeInsets.only(bottom: 6),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 11, vertical: 7),
+                            decoration: BoxDecoration(
+                              color: p.subtle,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: MathContentView(
+                              kp,
+                              style: TextStyle(
+                                fontSize: 13,
+                                height: 1.45,
+                                fontWeight: FontWeight.w500,
+                                color: p.inkPrimary,
+                              ),
+                            ),
+                          )),
+                    ],
+                  ),
+                ),
+              ],
+              // 解题步骤
+              if (result.steps.isNotEmpty) ...<Widget>[
+                const SizedBox(height: 12),
+                EditorialStepTimeline(steps: result.steps),
+              ],
+              const SizedBox(height: 16),
+              _AskAiCard(current: current),
+              const SizedBox(height: 12),
+              _PracticeSummaryCard(current: current),
+              const SizedBox(height: 12),
+              _MasteryActions(
+                current: current,
+                onMarkReviewing: () =>
+                    _markResult(context, ref, current, false),
+                onMarkMastered: () => _markResult(context, ref, current, true),
+              ),
             ],
-            const SizedBox(height: 16),
-            _AskAiCard(current: current),
-            const SizedBox(height: 12),
-            _PracticeSummaryCard(current: current),
-            const SizedBox(height: 12),
-            _MasteryActions(
-              current: current,
-              onMarkReviewing: () => _markResult(context, ref, current, false),
-              onMarkMastered: () => _markResult(context, ref, current, true),
-            ),
           ],
-        ],
+        ),
       ),
     );
   }
@@ -1895,9 +1910,8 @@ class _ConsistencyNotice extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
       decoration: BoxDecoration(
-        color: p.isDark
-            ? notice.color.withValues(alpha: 0.14)
-            : notice.background,
+        color:
+            p.isDark ? notice.color.withValues(alpha: 0.14) : notice.background,
         borderRadius: BorderRadius.circular(10),
       ),
       child: Row(

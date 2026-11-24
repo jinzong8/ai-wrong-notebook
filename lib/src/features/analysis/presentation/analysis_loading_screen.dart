@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:smart_wrong_notebook/src/app/providers.dart';
+import 'package:smart_wrong_notebook/src/common/widgets/app_back_scope.dart';
 import 'package:smart_wrong_notebook/src/common/widgets/editorial_surface.dart';
 import 'package:smart_wrong_notebook/src/data/remote/ai/ai_analysis_service.dart';
 import 'package:smart_wrong_notebook/src/data/services/question_analysis_coordinator.dart';
@@ -91,8 +92,7 @@ class _AnalysisLoadingScreenState extends ConsumerState<AnalysisLoadingScreen> {
       buffer
         ..writeln(
             '- baseUrl: ${config.baseUrl.isNotEmpty ? config.baseUrl : "(空)"}')
-        ..writeln(
-            '- model: ${config.model.isNotEmpty ? config.model : "(空)"}')
+        ..writeln('- model: ${config.model.isNotEmpty ? config.model : "(空)"}')
         ..writeln(
             '- apiKey: ${config.apiKey.isNotEmpty ? "[已设置(${config.apiKey.length}字符)]" : "(空)"}');
     } else {
@@ -157,6 +157,10 @@ class _AnalysisLoadingScreenState extends ConsumerState<AnalysisLoadingScreen> {
         invalidateQuestionList(ref);
         ref.invalidate(scanTaskCountProvider);
         ref.read(currentQuestionProvider.notifier).state = saved;
+        if (!widget.isReanalysis) {
+          ref.read(questionDetailReturnRouteProvider.notifier).state =
+              ref.read(captureReturnRouteProvider);
+        }
         final messenger = ScaffoldMessenger.maybeOf(context);
         context.go('/notebook/question/${saved.id}');
         messenger?.hideCurrentSnackBar();
@@ -202,26 +206,29 @@ class _AnalysisLoadingScreenState extends ConsumerState<AnalysisLoadingScreen> {
   @override
   Widget build(BuildContext context) {
     final p = EditorialPalette.of(context);
-    return Scaffold(
-      backgroundColor: p.canvas,
-      appBar: AppBar(
-        title: Text(widget.isReanalysis ? '重新解析' : 'AI 解析'),
-        leading: IconButton(
-          icon: const Icon(CupertinoIcons.chevron_left),
-          onPressed: _handleBack,
+    return AppBackScope(
+      onBack: _handleBack,
+      child: Scaffold(
+        backgroundColor: p.canvas,
+        appBar: AppBar(
+          title: Text(widget.isReanalysis ? '重新解析' : 'AI 解析'),
+          leading: IconButton(
+            icon: const Icon(CupertinoIcons.chevron_left),
+            onPressed: _handleBack,
+          ),
         ),
+        body: _errorMessage != null
+            ? _buildErrorView(context, p)
+            : _LoadingView(
+                step: _step,
+                steps: _steps,
+                stageLabels: _stageLabels,
+                isReanalysis: widget.isReanalysis,
+                progressText: _progressText,
+                onContinueInBackground:
+                    _canContinueInBackground ? () => context.go('/') : null,
+              ),
       ),
-      body: _errorMessage != null
-          ? _buildErrorView(context, p)
-          : _LoadingView(
-              step: _step,
-              steps: _steps,
-              stageLabels: _stageLabels,
-              isReanalysis: widget.isReanalysis,
-              progressText: _progressText,
-              onContinueInBackground:
-                  _canContinueInBackground ? () => context.go('/') : null,
-            ),
     );
   }
 

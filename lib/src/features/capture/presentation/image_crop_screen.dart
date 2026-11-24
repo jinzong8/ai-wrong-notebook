@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:smart_wrong_notebook/src/app/providers.dart';
+import 'package:smart_wrong_notebook/src/common/widgets/app_back_scope.dart';
 import 'package:smart_wrong_notebook/src/domain/models/content_status.dart';
 import 'package:smart_wrong_notebook/src/domain/models/question_record.dart';
 import 'package:smart_wrong_notebook/src/features/capture/application/free_crop_geometry.dart';
@@ -179,136 +180,142 @@ class _ImageCropScreenState extends ConsumerState<ImageCropScreen> {
     const barBg = Color(0xFF161B22);
     const primaryAccent = Color(0xFF6366F1);
 
-    return Scaffold(
-      backgroundColor: surfaceBg,
-      appBar: AppBar(
-        backgroundColor: barBg,
-        foregroundColor: Colors.white,
-        iconTheme: const IconThemeData(color: Colors.white),
-        actionsIconTheme: const IconThemeData(color: Colors.white),
-        systemOverlayStyle: SystemUiOverlayStyle.light,
-        elevation: 0,
-        title: const Text('框选题目', style: TextStyle(color: Colors.white)),
-        leading: IconButton(
-          key: const Key('crop-back-button'),
-          tooltip: '取消',
-          icon: const Icon(CupertinoIcons.chevron_left, color: Colors.white),
-          onPressed: _saving ? null : () => context.go('/'),
-        ),
-        actions: <Widget>[
-          TextButton(
-            key: const Key('crop-use-original'),
-            onPressed: (_loading || _saving || _decodedImage == null)
+    return AppBackScope(
+      enabled: !_saving,
+      onBack: () => context.go(ref.read(captureReturnRouteProvider)),
+      child: Scaffold(
+        backgroundColor: surfaceBg,
+        appBar: AppBar(
+          backgroundColor: barBg,
+          foregroundColor: Colors.white,
+          iconTheme: const IconThemeData(color: Colors.white),
+          actionsIconTheme: const IconThemeData(color: Colors.white),
+          systemOverlayStyle: SystemUiOverlayStyle.light,
+          elevation: 0,
+          title: const Text('框选题目', style: TextStyle(color: Colors.white)),
+          leading: IconButton(
+            key: const Key('crop-back-button'),
+            tooltip: '取消',
+            icon: const Icon(CupertinoIcons.chevron_left, color: Colors.white),
+            onPressed: _saving
                 ? null
-                : _useOriginalImage,
-            style: TextButton.styleFrom(foregroundColor: Colors.white70),
-            child: const Text('用原图'),
+                : () => context.go(ref.read(captureReturnRouteProvider)),
           ),
-        ],
-      ),
-      body: Column(
-        children: <Widget>[
-          Container(
-            width: double.infinity,
-            color: barBg,
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-            child: const Text(
-              '拖动四边或四角自由框选单道题，不限宽高比',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 12, color: Colors.white60),
+          actions: <Widget>[
+            TextButton(
+              key: const Key('crop-use-original'),
+              onPressed: (_loading || _saving || _decodedImage == null)
+                  ? null
+                  : _useOriginalImage,
+              style: TextButton.styleFrom(foregroundColor: Colors.white70),
+              child: const Text('用原图'),
             ),
-          ),
-          Expanded(
-            child: _buildCanvas(),
-          ),
-          Container(
-            color: barBg,
-            child: SafeArea(
-              top: false,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  if (_decodedImage != null) ...<Widget>[
-                    CropAngleControl(
-                      angleDegrees: _fineRotationDegrees,
-                      enabled: !_saving,
-                      onChangeStart: () =>
-                          setState(() => _adjustingAngle = true),
-                      onChangeEnd: () =>
-                          setState(() => _adjustingAngle = false),
-                      onChanged: (deg) =>
-                          setState(() => _fineRotationDegrees = deg),
-                    ),
-                    Divider(
-                      height: 1,
-                      color: Colors.white.withValues(alpha: 0.08),
-                    ),
-                  ],
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
-                    child: Row(
-                      children: <Widget>[
-                        _CropToolButton(
-                          key: const Key('crop-rotate-left'),
-                          icon: CupertinoIcons.rotate_left,
-                          label: '左旋',
-                          onPressed: (_decodedImage == null || _saving)
-                              ? null
-                              : () => _rotate(clockwise: false),
-                        ),
-                        const SizedBox(width: 4),
-                        _CropToolButton(
-                          key: const Key('crop-rotate-right'),
-                          icon: CupertinoIcons.rotate_right,
-                          label: '右旋',
-                          onPressed: (_decodedImage == null || _saving)
-                              ? null
-                              : () => _rotate(clockwise: true),
-                        ),
-                        const SizedBox(width: 4),
-                        _CropToolButton(
-                          key: const Key('crop-reset'),
-                          icon: CupertinoIcons.arrow_counterclockwise,
-                          label: '重置',
-                          onPressed: (_decodedImage == null || _saving)
-                              ? null
-                              : _resetCrop,
-                        ),
-                        const Spacer(),
-                        FilledButton.icon(
-                          key: const Key('crop-confirm'),
-                          style: FilledButton.styleFrom(
-                            backgroundColor: primaryAccent,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 20,
-                              vertical: 12,
-                            ),
-                          ),
-                          onPressed: (_decodedImage == null || _saving)
-                              ? null
-                              : _confirmCrop,
-                          icon: _saving
-                              ? const SizedBox(
-                                  width: 16,
-                                  height: 16,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    color: Colors.white,
-                                  ),
-                                )
-                              : const Icon(CupertinoIcons.checkmark_alt,
-                                  size: 18),
-                          label: Text(_saving ? '处理中...' : '开始分析'),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
+          ],
+        ),
+        body: Column(
+          children: <Widget>[
+            Container(
+              width: double.infinity,
+              color: barBg,
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+              child: const Text(
+                '拖动四边或四角自由框选单道题，不限宽高比',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 12, color: Colors.white60),
               ),
             ),
-          ),
-        ],
+            Expanded(
+              child: _buildCanvas(),
+            ),
+            Container(
+              color: barBg,
+              child: SafeArea(
+                top: false,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    if (_decodedImage != null) ...<Widget>[
+                      CropAngleControl(
+                        angleDegrees: _fineRotationDegrees,
+                        enabled: !_saving,
+                        onChangeStart: () =>
+                            setState(() => _adjustingAngle = true),
+                        onChangeEnd: () =>
+                            setState(() => _adjustingAngle = false),
+                        onChanged: (deg) =>
+                            setState(() => _fineRotationDegrees = deg),
+                      ),
+                      Divider(
+                        height: 1,
+                        color: Colors.white.withValues(alpha: 0.08),
+                      ),
+                    ],
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+                      child: Row(
+                        children: <Widget>[
+                          _CropToolButton(
+                            key: const Key('crop-rotate-left'),
+                            icon: CupertinoIcons.rotate_left,
+                            label: '左旋',
+                            onPressed: (_decodedImage == null || _saving)
+                                ? null
+                                : () => _rotate(clockwise: false),
+                          ),
+                          const SizedBox(width: 4),
+                          _CropToolButton(
+                            key: const Key('crop-rotate-right'),
+                            icon: CupertinoIcons.rotate_right,
+                            label: '右旋',
+                            onPressed: (_decodedImage == null || _saving)
+                                ? null
+                                : () => _rotate(clockwise: true),
+                          ),
+                          const SizedBox(width: 4),
+                          _CropToolButton(
+                            key: const Key('crop-reset'),
+                            icon: CupertinoIcons.arrow_counterclockwise,
+                            label: '重置',
+                            onPressed: (_decodedImage == null || _saving)
+                                ? null
+                                : _resetCrop,
+                          ),
+                          const Spacer(),
+                          FilledButton.icon(
+                            key: const Key('crop-confirm'),
+                            style: FilledButton.styleFrom(
+                              backgroundColor: primaryAccent,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 20,
+                                vertical: 12,
+                              ),
+                            ),
+                            onPressed: (_decodedImage == null || _saving)
+                                ? null
+                                : _confirmCrop,
+                            icon: _saving
+                                ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white,
+                                    ),
+                                  )
+                                : const Icon(CupertinoIcons.checkmark_alt,
+                                    size: 18),
+                            label: Text(_saving ? '处理中...' : '开始分析'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:smart_wrong_notebook/src/app/providers.dart';
+import 'package:smart_wrong_notebook/src/common/widgets/app_back_scope.dart';
 import 'package:smart_wrong_notebook/src/domain/models/mastery_level.dart';
 import 'package:smart_wrong_notebook/src/domain/models/question_record.dart';
 import 'package:smart_wrong_notebook/src/domain/models/review_log.dart';
@@ -15,25 +16,28 @@ class ReviewHistoryScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final logsAsync = ref.watch(_reviewLogsWithQuestionsProvider);
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('复习记录'),
-        leading: IconButton(
-          icon: const Icon(CupertinoIcons.chevron_left),
-          onPressed: () => context.go('/review'),
+    return AppBackScope(
+      onBack: () => context.go('/review'),
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('复习记录'),
+          leading: IconButton(
+            icon: const Icon(CupertinoIcons.chevron_left),
+            onPressed: () => context.go('/review'),
+          ),
         ),
-      ),
-      body: logsAsync.when(
-        data: (entries) => entries.isEmpty
-            ? _EmptyHistoryCard()
-            : ListView.builder(
-                padding: const EdgeInsets.all(16),
-                itemCount: entries.length,
-                itemBuilder: (_, index) =>
-                    _buildEntry(context, ref, entries[index]),
-              ),
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('加载失败: $e')),
+        body: logsAsync.when(
+          data: (entries) => entries.isEmpty
+              ? _EmptyHistoryCard()
+              : ListView.builder(
+                  padding: const EdgeInsets.all(16),
+                  itemCount: entries.length,
+                  itemBuilder: (_, index) =>
+                      _buildEntry(context, ref, entries[index]),
+                ),
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (e, _) => Center(child: Text('加载失败: $e')),
+        ),
       ),
     );
   }
@@ -100,6 +104,8 @@ class ReviewHistoryScreen extends ConsumerWidget {
             ? () {
                 ref.read(currentQuestionProvider.notifier).state =
                     entry.question;
+                ref.read(questionDetailReturnRouteProvider.notifier).state =
+                    '/review/history';
                 context.go('/notebook/question/${entry.question!.id}');
               }
             : null,

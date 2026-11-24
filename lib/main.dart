@@ -41,6 +41,7 @@ import 'package:smart_wrong_notebook/src/features/analysis/presentation/analysis
 import 'package:smart_wrong_notebook/src/features/analysis/presentation/question_text_correction_screen.dart';
 import 'package:smart_wrong_notebook/src/features/analysis/presentation/exercise_practice_screen.dart';
 import 'package:smart_wrong_notebook/src/features/review/presentation/review_history_screen.dart';
+import 'package:smart_wrong_notebook/src/common/widgets/app_back_scope.dart';
 import 'package:smart_wrong_notebook/src/data/files/image_storage_service.dart';
 import 'package:smart_wrong_notebook/src/shared/widgets/katex_math_view.dart';
 
@@ -237,33 +238,36 @@ class ScaffoldWithNavBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: navigationShell,
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: navigationShell.currentIndex,
-        onDestinationSelected: (int index) => navigationShell.goBranch(index),
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(CupertinoIcons.house),
-            selectedIcon: Icon(CupertinoIcons.house_fill),
-            label: '首页',
-          ),
-          NavigationDestination(
-            icon: Icon(CupertinoIcons.book),
-            selectedIcon: Icon(CupertinoIcons.book_fill),
-            label: '错题本',
-          ),
-          NavigationDestination(
-            icon: Icon(CupertinoIcons.arrow_2_circlepath),
-            selectedIcon: Icon(CupertinoIcons.arrow_2_circlepath),
-            label: '复习',
-          ),
-          NavigationDestination(
-            icon: Icon(CupertinoIcons.gear),
-            selectedIcon: Icon(CupertinoIcons.gear_solid),
-            label: '设置',
-          ),
-        ],
+    return TabShellBackScope(
+      navigationShell: navigationShell,
+      child: Scaffold(
+        body: navigationShell,
+        bottomNavigationBar: NavigationBar(
+          selectedIndex: navigationShell.currentIndex,
+          onDestinationSelected: (int index) => navigationShell.goBranch(index),
+          destinations: const [
+            NavigationDestination(
+              icon: Icon(CupertinoIcons.house),
+              selectedIcon: Icon(CupertinoIcons.house_fill),
+              label: '首页',
+            ),
+            NavigationDestination(
+              icon: Icon(CupertinoIcons.book),
+              selectedIcon: Icon(CupertinoIcons.book_fill),
+              label: '错题本',
+            ),
+            NavigationDestination(
+              icon: Icon(CupertinoIcons.arrow_2_circlepath),
+              selectedIcon: Icon(CupertinoIcons.arrow_2_circlepath),
+              label: '复习',
+            ),
+            NavigationDestination(
+              icon: Icon(CupertinoIcons.gear),
+              selectedIcon: Icon(CupertinoIcons.gear_solid),
+              label: '设置',
+            ),
+          ],
+        ),
       ),
     );
   }
