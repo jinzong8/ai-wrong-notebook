@@ -73,6 +73,76 @@ Rect computeFittedImageRect({
   return Rect.fromLTWH(left, top, drawW, drawH);
 }
 
+/// Computes a 100%-width display rectangle for [imageSize] centered vertically
+/// inside [viewportSize]. When the photo is taller than the viewport (for
+/// example, a 9:16 portrait camera capture), top and bottom overflow equally,
+/// matching the live camera viewfinder scale pixel-for-pixel.
+Rect computeWidthFilledImageRect({
+  required Size viewportSize,
+  required Size imageSize,
+}) {
+  final drawW = math.max(1.0, viewportSize.width);
+  if (imageSize.width <= 0 || imageSize.height <= 0) {
+    return Rect.fromLTWH(0, 0, drawW, math.max(1.0, viewportSize.height));
+  }
+  final drawH = drawW * (imageSize.height / imageSize.width);
+  final top = (viewportSize.height - drawH) / 2.0;
+  return Rect.fromLTWH(0, top, drawW, drawH);
+}
+
+/// Returns the `[0, 1]` sub-rectangle of [displayRect] visible inside
+/// [viewportSize]. When top/bottom overflow is clipped, applies [verticalInset]
+/// so top/bottom crop handles remain comfortably reachable inside the viewport.
+Rect computeVisibleNormalizedBounds({
+  required Rect displayRect,
+  required Size viewportSize,
+  double verticalInset = 10.0,
+}) {
+  if (displayRect.width <= 0 || displayRect.height <= 0) {
+    return fullNormalizedCropRect;
+  }
+  final visTopPx = displayRect.top < 0
+      ? math.min(viewportSize.height * 0.25, verticalInset)
+      : displayRect.top;
+  final visBottomPx = displayRect.bottom > viewportSize.height
+      ? math.max(
+          viewportSize.height * 0.75,
+          viewportSize.height - verticalInset,
+        )
+      : displayRect.bottom;
+
+  final left = ((0.0 - displayRect.left) / displayRect.width).clamp(0.0, 1.0);
+  final right = ((viewportSize.width - displayRect.left) / displayRect.width)
+      .clamp(0.0, 1.0);
+  final top =
+      ((visTopPx - displayRect.top) / displayRect.height).clamp(0.0, 1.0);
+  final bottom =
+      ((visBottomPx - displayRect.top) / displayRect.height).clamp(0.0, 1.0);
+
+  if (right <= left || bottom <= top) {
+    return fullNormalizedCropRect;
+  }
+  return Rect.fromLTRB(left, top, right, bottom);
+}
+
+/// Clamps [rect] into [bounds] while enforcing a minimum crop size.
+Rect clampNormalizedCropRect(
+  Rect rect, {
+  required Rect bounds,
+  required Rect displayRect,
+  double minCropSizePx = 28.0,
+}) {
+  if (displayRect.width <= 0 || displayRect.height <= 0) return rect;
+  final minW = math.min(bounds.width, minCropSizePx / displayRect.width);
+  final minH = math.min(bounds.height, minCropSizePx / displayRect.height);
+
+  var left = rect.left.clamp(bounds.left, bounds.right - minW);
+  var top = rect.top.clamp(bounds.top, bounds.bottom - minH);
+  var right = rect.right.clamp(left + minW, bounds.right);
+  var bottom = rect.bottom.clamp(top + minH, bounds.bottom);
+  return Rect.fromLTRB(left, top, right, bottom);
+}
+
 /// Maps normalized `[0, 1]` crop bounds to display coordinates inside
 /// [displayRect].
 Rect normalizedToDisplayRect(Rect normalizedRect, Rect displayRect) {
@@ -165,6 +235,7 @@ Rect applyCropHandleDelta({
   required CropHandle handle,
   required Offset delta,
   required Rect displayRect,
+  Rect bounds = fullNormalizedCropRect,
   double minCropSizePx = 28.0,
 }) {
   if (displayRect.width <= 0 || displayRect.height <= 0) {
@@ -173,8 +244,8 @@ Rect applyCropHandleDelta({
 
   final dx = delta.dx / displayRect.width;
   final dy = delta.dy / displayRect.height;
-  final minW = math.min(1.0, minCropSizePx / displayRect.width);
-  final minH = math.min(1.0, minCropSizePx / displayRect.height);
+  final minW = math.min(bounds.width, minCropSizePx / displayRect.width);
+  final minH = math.min(bounds.height, minCropSizePx / displayRect.height);
 
   var left = normalizedRect.left;
   var top = normalizedRect.top;
@@ -183,40 +254,40 @@ Rect applyCropHandleDelta({
 
   switch (handle) {
     case CropHandle.move:
-      final width = right - left;
-      final height = bottom - top;
-      left = (left + dx).clamp(0.0, 1.0 - width);
-      top = (top + dy).clamp(0.0, 1.0 - height);
+      final width = math.min(bounds.width, right - left);
+      final height = math.min(bounds.height, bottom - top);
+      left = (left + dx).clamp(bounds.left, bounds.right - width);
+      top = (top + dy).clamp(bounds.top, bounds.bottom - height);
       right = left + width;
       bottom = top + height;
       break;
     case CropHandle.left:
-      left = (left + dx).clamp(0.0, right - minW);
+      left = (left + dx).clamp(bounds.left, right - minW);
       break;
     case CropHandle.right:
-      right = (right + dx).clamp(left + minW, 1.0);
+      right = (right + dx).clamp(left + minW, bounds.right);
       break;
     case CropHandle.top:
-      top = (top + dy).clamp(0.0, bottom - minH);
+      top = (top + dy).clamp(bounds.top, bottom - minH);
       break;
     case CropHandle.bottom:
-      bottom = (bottom + dy).clamp(top + minH, 1.0);
+      bottom = (bottom + dy).clamp(top + minH, bounds.bottom);
       break;
     case CropHandle.topLeft:
-      left = (left + dx).clamp(0.0, right - minW);
-      top = (top + dy).clamp(0.0, bottom - minH);
+      left = (left + dx).clamp(bounds.left, right - minW);
+      top = (top + dy).clamp(bounds.top, bottom - minH);
       break;
     case CropHandle.topRight:
-      right = (right + dx).clamp(left + minW, 1.0);
-      top = (top + dy).clamp(0.0, bottom - minH);
+      right = (right + dx).clamp(left + minW, bounds.right);
+      top = (top + dy).clamp(bounds.top, bottom - minH);
       break;
     case CropHandle.bottomLeft:
-      left = (left + dx).clamp(0.0, right - minW);
-      bottom = (bottom + dy).clamp(top + minH, 1.0);
+      left = (left + dx).clamp(bounds.left, right - minW);
+      bottom = (bottom + dy).clamp(top + minH, bounds.bottom);
       break;
     case CropHandle.bottomRight:
-      right = (right + dx).clamp(left + minW, 1.0);
-      bottom = (bottom + dy).clamp(top + minH, 1.0);
+      right = (right + dx).clamp(left + minW, bounds.right);
+      bottom = (bottom + dy).clamp(top + minH, bounds.bottom);
       break;
   }
 

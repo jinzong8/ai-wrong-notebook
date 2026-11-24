@@ -202,51 +202,6 @@ File _createThreeBandWorksheetPng(
   return file;
 }
 
-/// Creates a synthetic 3-question printed worksheet PNG (white paper, dark
-/// text-like strokes in 3 separated blocks; middle question spans y = 41%..57%).
-File _createThreeQuestionPrintedWorksheetPng(
-  Directory dir, {
-  String name = 'printed_worksheet.png',
-  int width = 360,
-  int height = 480,
-}) {
-  final canvas = img.Image(width: width, height: height);
-  for (var y = 0; y < height; y++) {
-    for (var x = 0; x < width; x++) {
-      canvas.setPixelRgb(x, y, 246, 246, 246);
-    }
-  }
-
-  void drawLine(int left, int right, int yTop, {int lineH = 11}) {
-    for (var x = left; x < right; x++) {
-      if ((x - left) % 9 >= 6) continue;
-      for (var y = yTop; y < yTop + lineH; y++) {
-        canvas.setPixelRgb(x, y, 30, 30, 30);
-      }
-    }
-  }
-
-  // Question 1 (top)
-  drawLine(28, 330, 34);
-  drawLine(28, 320, 52);
-  drawLine(28, 220, 70);
-
-  // Question 2 (middle, straddling y = 240)
-  drawLine(28, 330, 200);
-  drawLine(28, 324, 218);
-  drawLine(28, 316, 236);
-  drawLine(28, 260, 254);
-
-  // Question 3 (bottom)
-  drawLine(28, 330, 376);
-  drawLine(28, 320, 394);
-  drawLine(28, 240, 412);
-
-  final file = File('${dir.path}/$name');
-  file.writeAsBytesSync(img.encodePng(canvas));
-  return file;
-}
-
 Future<void> _pumpUntilFound(
   WidgetTester tester,
   Finder finder, {
@@ -263,7 +218,7 @@ Future<void> _pumpUntilFound(
 void main() {
   group('CameraCaptureCropScreen', () {
     testWidgets(
-      'capturing transitions directly into in-place free crop and crops a thin strip',
+      'capturing transitions directly into full-width in-place crop with aimed framing and manual adjustment',
       (tester) async {
         final tempDir = Directory.systemTemp.createTempSync('camera_crop_');
         final storage = _TempImageStorageService(tempDir);
@@ -321,7 +276,9 @@ void main() {
           expect(find.byKey(const Key('crop-canvas')), findsNothing);
           expect(session.initializeCount, 1);
 
-          // Press shutter -> stays on /capture/camera and immediately freezes into crop canvas.
+          final scaffoldWidth = tester.getRect(find.byType(Scaffold)).width;
+
+          // Press shutter -> stays on /capture/camera and immediately freezes into full-width crop canvas.
           await tester.tap(find.byKey(const Key('camera-shutter-button')));
           await tester.pump();
           await _pumpUntilFound(tester, find.byKey(const Key('crop-canvas')));
@@ -334,25 +291,24 @@ void main() {
           expect(find.byKey(const Key('crop-canvas')), findsOneWidget);
           expect(find.byKey(const Key('crop-retake-button')), findsOneWidget);
           expect(find.byKey(const Key('crop-confirm')), findsOneWidget);
+          expect(find.byKey(const Key('crop-auto-select')), findsNothing);
           expect(find.byKey(const Key('camera-shutter-button')), findsNothing);
+          expect(
+            find.text('已按取景范围框选，拖动四边或四角可微调'),
+            findsOneWidget,
+          );
 
-          // Drag top & bottom edges freely to isolate ONLY the middle green band.
+          // Frozen photo preserves the exact 100% viewport width (no narrowing).
+          final imageRect = tester.getRect(find.byType(RawImage));
+          expect(imageRect.width, closeTo(scaffoldWidth, 0.5));
+
+          // Manually trim the right edge inward slightly to verify free drag
+          // works directly from the aimed 4:1 box.
           final canvasRect =
               tester.getRect(find.byKey(const Key('crop-canvas')));
-          final fitted = computeFittedImageRect(
-            viewportSize: canvasRect.size,
-            imageSize: const Size(300, 600),
-          );
-
           await tester.dragFrom(
-            canvasRect.topLeft + Offset(fitted.center.dx, fitted.top),
-            Offset(0, fitted.height * 0.42),
-          );
-          await tester.pump();
-
-          await tester.dragFrom(
-            canvasRect.topLeft + Offset(fitted.center.dx, fitted.bottom),
-            Offset(0, -fitted.height * 0.42),
+            Offset(canvasRect.right - 4, canvasRect.center.dy),
+            Offset(-canvasRect.width * 0.25, 0),
           );
           await tester.pump();
 
@@ -370,7 +326,9 @@ void main() {
           expect(savedFile.existsSync(), isTrue);
           final cropped = img.decodeJpg(savedFile.readAsBytesSync())!;
 
-          // Wide thin horizontal strip cropped from a 1:2 portrait shot!
+          // Cropped width trimmed (~75% of 300px) and still a thin horizontal strip
+          // centered strictly on the aimed middle green band.
+          expect(cropped.width, inInclusiveRange(190, 250));
           expect(cropped.width / cropped.height, greaterThan(2.5));
           final center = cropped.getPixel(
             cropped.width ~/ 2,
@@ -564,17 +522,21 @@ void main() {
     );
 
     testWidgets(
-      'auto-selects middle question right after shutter and crops it without manual drag',
+      'WYSIWYG aimed framing preserves 100% width on 9:16 portrait capture and crops exact 4:1 aimed strip',
       (tester) async {
+        tester.view.physicalSize = const Size(412, 892);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.reset);
+
         final tempDir =
-            Directory.systemTemp.createTempSync('camera_auto_crop_');
+            Directory.systemTemp.createTempSync('camera_wysiwyg_crop_');
         final storage = _TempImageStorageService(tempDir);
         final session = _FakeCameraCaptureSession(
-          photoFactory: () => _createThreeQuestionPrintedWorksheetPng(
+          photoFactory: () => _createThreeBandWorksheetPng(
             tempDir,
-            name: 'worksheet_auto.png',
+            name: 'portrait_9_16.png',
             width: 360,
-            height: 480,
+            height: 640,
           ),
         );
 
@@ -608,20 +570,23 @@ void main() {
 
           await tester.tap(find.byKey(const Key('camera-shutter-button')));
           await tester.pump();
-          await _pumpUntilFound(
-            tester,
-            find.text('已自动框选中间题目，拖动四边或四角可微调'),
-          );
+          await _pumpUntilFound(tester, find.byKey(const Key('crop-canvas')));
           await tester.pumpAndSettle();
 
           expect(
-            find.text('已自动框选中间题目，拖动四边或四角可微调'),
+            find.text('已按取景范围框选，拖动四边或四角可微调'),
             findsOneWidget,
           );
-          expect(find.byKey(const Key('crop-auto-select')), findsOneWidget);
+          expect(find.byKey(const Key('crop-auto-select')), findsNothing);
 
-          // Confirm directly WITHOUT manually dragging -> should save only the
-          // auto-detected middle question strip, NOT the whole 360x480 page!
+          // Frozen 9:16 photo stays at full 100% viewport width (412px),
+          // matching the live viewfinder scale without black sidebars.
+          final imageRect = tester.getRect(find.byType(RawImage));
+          expect(imageRect.width, closeTo(412.0, 0.5));
+          expect(imageRect.left, closeTo(0.0, 0.5));
+
+          // Confirm directly WITHOUT dragging -> outputs the exact aimed 4:1
+          // strip covering the middle green band!
           await tester.tap(find.byKey(const Key('crop-confirm')));
           await tester.pump();
           await _pumpUntilFound(tester, find.text('LOADING_ROUTE'));
@@ -630,10 +595,15 @@ void main() {
           expect(storage.lastSavedPath, isNotNull);
           final cropped =
               img.decodeJpg(File(storage.lastSavedPath!).readAsBytesSync())!;
-          // Middle question spans ~65px + breathing room (~90-140px) out of 480px.
-          expect(cropped.height, lessThan(200));
-          expect(cropped.height, greaterThan(65));
-          expect(cropped.width, greaterThan(280));
+          expect(cropped.width, 360);
+          expect(cropped.width / cropped.height, closeTo(4.0, 0.35));
+          final center = cropped.getPixel(
+            cropped.width ~/ 2,
+            cropped.height ~/ 2,
+          );
+          expect(center.g, greaterThan(170));
+          expect(center.r, lessThan(60));
+          expect(center.b, lessThan(60));
         } finally {
           tempDir.deleteSync(recursive: true);
         }
@@ -641,17 +611,21 @@ void main() {
     );
 
     testWidgets(
-      'supports manual adjustment after auto-select, reset to full, and re-snap via 自动',
+      'manual handle adjustment expands aimed crop box and reset restores aimed 4:1 box',
       (tester) async {
+        tester.view.physicalSize = const Size(412, 892);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.reset);
+
         final tempDir =
-            Directory.systemTemp.createTempSync('camera_auto_adjust_');
+            Directory.systemTemp.createTempSync('camera_aimed_adjust_');
         final storage = _TempImageStorageService(tempDir);
         final session = _FakeCameraCaptureSession(
-          photoFactory: () => _createThreeQuestionPrintedWorksheetPng(
+          photoFactory: () => _createThreeBandWorksheetPng(
             tempDir,
-            name: 'worksheet_adjust.png',
+            name: 'portrait_adjust.png',
             width: 360,
-            height: 480,
+            height: 640,
           ),
         );
 
@@ -685,49 +659,37 @@ void main() {
 
           await tester.tap(find.byKey(const Key('camera-shutter-button')));
           await tester.pump();
-          await _pumpUntilFound(
-            tester,
-            find.text('已自动框选中间题目，拖动四边或四角可微调'),
-          );
+          await _pumpUntilFound(tester, find.byKey(const Key('crop-canvas')));
           await tester.pumpAndSettle();
 
-          // Reset clears auto-crop back to full frame; tapping 自动 re-snaps it.
-          await tester.tap(find.byKey(const Key('crop-reset')));
-          await tester.pumpAndSettle();
-          expect(
-            find.text('拖动四边或四角自由框选单道题，不限宽高比'),
-            findsOneWidget,
-          );
-
-          await tester.tap(find.byKey(const Key('crop-auto-select')));
-          await tester.pump();
-          await _pumpUntilFound(
-            tester,
-            find.text('已自动框选中间题目，拖动四边或四角可微调'),
-          );
-          await tester.pumpAndSettle();
-
-          // Manually drag the bottom edge of the auto-selected box downward to
-          // expand the selection, proving manual fine-tuning works seamlessly.
           final canvasRect =
               tester.getRect(find.byKey(const Key('crop-canvas')));
-          final fitted = computeFittedImageRect(
-            viewportSize: canvasRect.size,
-            imageSize: const Size(360, 480),
-          );
-          // Bottom of auto-selected Q2 sits around 58%..62% of fitted height.
+          final guideHeight = canvasRect.width / 4.0;
+
+          // Expand bottom edge downward + tilt angle, then reset back to the
+          // aimed 4:1 box and 0°.
           await tester.dragFrom(
-            canvasRect.topLeft +
-                Offset(fitted.center.dx, fitted.top + fitted.height * 0.60),
-            Offset(0, fitted.height * 0.25),
+            Offset(canvasRect.center.dx, canvasRect.center.dy + guideHeight / 2),
+            const Offset(0, 140),
+          );
+          await tester.drag(
+            find.byKey(const Key('crop-angle-slider')),
+            const Offset(80, 0),
           );
           await tester.pumpAndSettle();
+          expect(find.text('0°'), findsNothing);
 
-          // Hint transitions out of untouched auto-select state once adjusted.
-          expect(
-            find.text('拖动四边或四角自由框选单道题，不限宽高比'),
-            findsOneWidget,
+          await tester.tap(find.byKey(const Key('crop-reset')));
+          await tester.pumpAndSettle();
+          expect(find.text('0°'), findsOneWidget);
+
+          // Now drag bottom edge downward again and confirm -> output must be
+          // substantially taller than the initial ~90px aimed 4:1 strip.
+          await tester.dragFrom(
+            Offset(canvasRect.center.dx, canvasRect.center.dy + guideHeight / 2),
+            const Offset(0, 140),
           );
+          await tester.pumpAndSettle();
 
           await tester.tap(find.byKey(const Key('crop-confirm')));
           await tester.pump();
@@ -736,8 +698,8 @@ void main() {
 
           final cropped =
               img.decodeJpg(File(storage.lastSavedPath!).readAsBytesSync())!;
-          // Expanded significantly taller than the untouched auto-detected ~110px strip!
-          expect(cropped.height, greaterThan(180));
+          expect(cropped.width, 360);
+          expect(cropped.height, greaterThan(170));
         } finally {
           tempDir.deleteSync(recursive: true);
         }
@@ -853,6 +815,64 @@ void main() {
       expect(guide.width, phoneViewport.width);
       expect(guide.width / guide.height, closeTo(4.0, 1e-6));
       expect(guide.center.dy, closeTo(phoneViewport.height / 2, 1e-6));
+    });
+
+    test('computeWidthFilledImageRect fills 100% width and centers vertically',
+        () {
+      const viewport = Size(412, 650);
+      final tallRect = computeWidthFilledImageRect(
+        viewportSize: viewport,
+        imageSize: const Size(1080, 1920),
+      );
+      expect(tallRect.left, 0);
+      expect(tallRect.width, closeTo(412.0, 1e-6));
+      expect(tallRect.height, closeTo(412.0 * 16 / 9, 1e-4));
+      expect(tallRect.center.dy, closeTo(viewport.height / 2, 1e-6));
+      expect(tallRect.top, lessThan(0));
+      expect(tallRect.bottom, greaterThan(viewport.height));
+
+      final visibleBounds = computeVisibleNormalizedBounds(
+        displayRect: tallRect,
+        viewportSize: viewport,
+        verticalInset: 10.0,
+      );
+      expect(visibleBounds.left, 0.0);
+      expect(visibleBounds.right, 1.0);
+      expect(visibleBounds.top, greaterThan(0.0));
+      expect(visibleBounds.bottom, lessThan(1.0));
+      final screenBounds = normalizedToDisplayRect(visibleBounds, tallRect);
+      expect(screenBounds.top, closeTo(10.0, 1e-4));
+      expect(screenBounds.bottom, closeTo(viewport.height - 10.0, 1e-4));
+    });
+
+    test(
+        'computeAimedCropRect maps live 4:1 guide directly into photo coordinates',
+        () {
+      const previewViewport = Size(412, 700);
+      const capturedImage = Size(1080, 1920);
+      final aimed = computeAimedCropRect(
+        previewViewportSize: previewViewport,
+        capturedImageSize: capturedImage,
+      );
+
+      expect(aimed.left, 0.0);
+      expect(aimed.right, 1.0);
+      expect(aimed.center.dy, closeTo(0.5, 1e-6));
+      final pixelW = aimed.width * capturedImage.width;
+      final pixelH = aimed.height * capturedImage.height;
+      expect(pixelW / pixelH, closeTo(4.0, 1e-4));
+
+      // Projecting back onto a slightly shorter crop viewport preserves the
+      // exact 4:1 box centered on the same question.
+      final cropDisplay = computeWidthFilledImageRect(
+        viewportSize: const Size(412, 640),
+        imageSize: capturedImage,
+      );
+      final screenCrop = normalizedToDisplayRect(aimed, cropDisplay);
+      expect(screenCrop.left, closeTo(0.0, 1e-4));
+      expect(screenCrop.width, closeTo(412.0, 1e-4));
+      expect(screenCrop.width / screenCrop.height, closeTo(4.0, 1e-4));
+      expect(screenCrop.center.dy, closeTo(320.0, 1e-4));
     });
 
     testWidgets('live camera preview surface fills 100% viewport width',

@@ -3,6 +3,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:smart_wrong_notebook/src/app/providers.dart';
@@ -183,12 +184,15 @@ class _ImageCropScreenState extends ConsumerState<ImageCropScreen> {
       appBar: AppBar(
         backgroundColor: barBg,
         foregroundColor: Colors.white,
+        iconTheme: const IconThemeData(color: Colors.white),
+        actionsIconTheme: const IconThemeData(color: Colors.white),
+        systemOverlayStyle: SystemUiOverlayStyle.light,
         elevation: 0,
-        title: const Text('框选题目'),
+        title: const Text('框选题目', style: TextStyle(color: Colors.white)),
         leading: IconButton(
           key: const Key('crop-back-button'),
           tooltip: '取消',
-          icon: const Icon(CupertinoIcons.chevron_left),
+          icon: const Icon(CupertinoIcons.chevron_left, color: Colors.white),
           onPressed: _saving ? null : () => context.go('/'),
         ),
         actions: <Widget>[

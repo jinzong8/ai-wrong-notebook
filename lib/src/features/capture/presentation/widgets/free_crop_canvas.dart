@@ -21,6 +21,7 @@ class FreeCropCanvas extends StatefulWidget {
     required this.onCropRectChanged,
     this.fineRotationDegrees = 0.0,
     this.emphasizeGrid = false,
+    this.fillWidth = false,
     this.onInteractionStart,
     this.enabled = true,
     this.padding = kCropCanvasPadding,
@@ -32,6 +33,11 @@ class FreeCropCanvas extends StatefulWidget {
   final ValueChanged<Rect> onCropRectChanged;
   final double fineRotationDegrees;
   final bool emphasizeGrid;
+
+  /// When `true`, scales the image to fill 100% of the viewport width (clipping
+  /// excess height symmetrically if taller than the viewport) so camera capture
+  /// transitions into cropping at the exact same full-width scale.
+  final bool fillWidth;
   final VoidCallback? onInteractionStart;
   final bool enabled;
   final EdgeInsets padding;
@@ -72,13 +78,33 @@ class _FreeCropCanvasState extends State<FreeCropCanvas> {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final displayRect = computeFittedImageRect(
-          viewportSize: constraints.biggest,
-          imageSize: orientedSize,
-          padding: widget.padding,
-        );
+        final viewport = constraints.biggest;
+        final displayRect = widget.fillWidth
+            ? computeWidthFilledImageRect(
+                viewportSize: viewport,
+                imageSize: orientedSize,
+              )
+            : computeFittedImageRect(
+                viewportSize: viewport,
+                imageSize: orientedSize,
+                padding: widget.padding,
+              );
+        final dragBounds = widget.fillWidth
+            ? computeVisibleNormalizedBounds(
+                displayRect: displayRect,
+                viewportSize: viewport,
+                verticalInset: 10.0,
+              )
+            : fullNormalizedCropRect;
+        final effectiveCropRect = widget.fillWidth
+            ? clampNormalizedCropRect(
+                _cropRect,
+                bounds: dragBounds,
+                displayRect: displayRect,
+              )
+            : _cropRect;
         final screenCropRect =
-            normalizedToDisplayRect(_cropRect, displayRect);
+            normalizedToDisplayRect(effectiveCropRect, displayRect);
 
         Widget imageWidget = RotatedBox(
           quarterTurns: widget.quarterTurns,
@@ -118,11 +144,19 @@ class _FreeCropCanvasState extends State<FreeCropCanvas> {
               : (details) {
                   final handle = _activeHandle;
                   if (handle == null) return;
+                  final current = widget.fillWidth
+                      ? clampNormalizedCropRect(
+                          _cropRect,
+                          bounds: dragBounds,
+                          displayRect: displayRect,
+                        )
+                      : _cropRect;
                   final next = applyCropHandleDelta(
-                    normalizedRect: _cropRect,
+                    normalizedRect: current,
                     handle: handle,
                     delta: details.delta,
                     displayRect: displayRect,
+                    bounds: dragBounds,
                   );
                   if (next != _cropRect) {
                     setState(() => _cropRect = next);
@@ -141,6 +175,7 @@ class _FreeCropCanvasState extends State<FreeCropCanvas> {
           },
           child: Stack(
             fit: StackFit.expand,
+            clipBehavior: Clip.hardEdge,
             children: <Widget>[
               Positioned.fromRect(
                 rect: displayRect,
