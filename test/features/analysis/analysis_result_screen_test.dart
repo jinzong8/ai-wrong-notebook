@@ -817,7 +817,7 @@ void main() {
   });
 
   testWidgets(
-      'analysis result screen navigates to split confirmation when saving',
+      'analysis result screen navigates to split confirmation when saving multi-question result',
       (tester) async {
     final container = ProviderContainer(
       overrides: <Override>[
@@ -829,7 +829,106 @@ void main() {
 
     container.read(currentQuestionProvider.notifier).state =
         QuestionRecord.draft(
-      id: 'q-save',
+      id: 'q-save-multi',
+      imagePath: '',
+      subject: Subject.math,
+      recognizedText: '1. 第一题\n2. 第二题',
+    ).copyWith(
+      splitResult: const QuestionSplitResult(
+        sourceText: '1. 第一题\n2. 第二题',
+        strategy: QuestionSplitStrategy.numbered,
+        candidates: <QuestionSplitCandidate>[
+          QuestionSplitCandidate(
+            id: 'candidate-1',
+            order: 1,
+            text: '1. 第一题',
+            strategy: QuestionSplitStrategy.numbered,
+          ),
+          QuestionSplitCandidate(
+            id: 'candidate-2',
+            order: 2,
+            text: '2. 第二题',
+            strategy: QuestionSplitStrategy.numbered,
+          ),
+        ],
+      ),
+      candidateAnalyses: const <CandidateAnalysisSnapshot>[
+        CandidateAnalysisSnapshot(
+          candidateId: 'candidate-1',
+          order: 1,
+          questionText: '1. 第一题',
+          analysisResult: AnalysisResult(
+            finalAnswer: 'A',
+            steps: <String>['步骤1'],
+            aiTags: <String>['方程'],
+            knowledgePoints: <String>['平方根'],
+            mistakeReason: '粗心',
+            studyAdvice: '验算',
+          ),
+        ),
+        CandidateAnalysisSnapshot(
+          candidateId: 'candidate-2',
+          order: 2,
+          questionText: '2. 第二题',
+          analysisResult: AnalysisResult(
+            finalAnswer: 'B',
+            steps: <String>['步骤2'],
+            aiTags: <String>['函数'],
+            knowledgePoints: <String>['一次函数'],
+            mistakeReason: '代入错',
+            studyAdvice: '细心',
+          ),
+        ),
+      ],
+    );
+
+    final router = GoRouter(
+      initialLocation: '/analysis/result',
+      routes: <GoRoute>[
+        GoRoute(
+          path: '/analysis/result',
+          builder: (_, __) => const AnalysisResultScreen(),
+        ),
+        GoRoute(
+          path: '/capture/split-confirmation',
+          builder: (_, __) => const Scaffold(body: Text('SPLIT_CONFIRMATION')),
+        ),
+      ],
+    );
+    addTearDown(router.dispose);
+
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: container,
+      child: MaterialApp.router(routerConfig: router),
+    ));
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(ListView), const Offset(0, -1200));
+    await tester.pumpAndSettle();
+
+    expect(find.text('保存到错题本'), findsOneWidget);
+    await tester.tap(find.text('保存到错题本'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('SPLIT_CONFIRMATION'), findsOneWidget);
+    expect(container.read(currentQuestionSplitSessionProvider), isNotNull);
+  });
+
+  testWidgets(
+      'analysis result screen saves single question directly without split confirmation',
+      (tester) async {
+    final repo = InMemoryQuestionRepository();
+    final container = ProviderContainer(
+      overrides: <Override>[
+        questionRepositoryProvider.overrideWithValue(repo),
+        questionSplitServiceProvider
+            .overrideWithValue(const QuestionSplitService()),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    container.read(currentQuestionProvider.notifier).state =
+        QuestionRecord.draft(
+      id: 'q-save-single',
       imagePath: '',
       subject: Subject.math,
       recognizedText: r'已知 $x^2+1=5$，求 x 的值',
@@ -845,7 +944,7 @@ void main() {
       savedExercises: <GeneratedExercise>[
         GeneratedExercise(
           id: 'e-save',
-          questionId: 'q-save',
+          questionId: 'q-save-single',
           generationMode: ExerciseGenerationMode.practice,
           difficulty: '同级',
           question: r'若 $y^2=9$，则 y 的值为？',
@@ -867,8 +966,15 @@ void main() {
           path: '/capture/split-confirmation',
           builder: (_, __) => const Scaffold(body: Text('SPLIT_CONFIRMATION')),
         ),
+        GoRoute(
+          path: '/notebook/question/:id',
+          builder: (_, state) => Scaffold(
+            body: Text('DETAIL_${state.pathParameters['id']}'),
+          ),
+        ),
       ],
     );
+    addTearDown(router.dispose);
 
     await tester.pumpWidget(UncontrolledProviderScope(
       container: container,
@@ -882,8 +988,12 @@ void main() {
     await tester.tap(find.text('保存到错题本'));
     await tester.pumpAndSettle();
 
-    expect(find.text('SPLIT_CONFIRMATION'), findsOneWidget);
-    expect(container.read(currentQuestionSplitSessionProvider), isNotNull);
+    expect(find.text('DETAIL_q-save-single'), findsOneWidget);
+    expect(find.text('SPLIT_CONFIRMATION'), findsNothing);
+    final saved = await repo.listAll();
+    expect(saved, hasLength(1));
+    expect(saved.single.id, 'q-save-single');
+    expect(saved.single.splitOrder, isNull);
   });
 
   testWidgets(

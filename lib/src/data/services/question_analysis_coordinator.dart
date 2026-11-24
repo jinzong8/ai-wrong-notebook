@@ -1,10 +1,13 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:smart_wrong_notebook/src/data/remote/ai/ai_analysis_service.dart';
+import 'package:smart_wrong_notebook/src/data/repositories/question_repository.dart';
 import 'package:smart_wrong_notebook/src/data/repositories/settings_repository.dart';
 import 'package:smart_wrong_notebook/src/data/services/question_analysis_pipeline.dart';
 import 'package:smart_wrong_notebook/src/domain/models/ai_task_spec.dart';
 import 'package:smart_wrong_notebook/src/domain/models/analysis_job.dart';
+import 'package:smart_wrong_notebook/src/domain/models/content_status.dart';
 import 'package:smart_wrong_notebook/src/domain/models/question_record.dart';
 import 'package:smart_wrong_notebook/src/domain/models/subject.dart';
 import 'package:smart_wrong_notebook/src/domain/repositories/analysis_job_repository.dart';
@@ -127,12 +130,14 @@ class QueuedQuestionAnalysisCoordinator
     required SettingsRepository settingsRepository,
     required AnalysisJobRepository repository,
     required AnalysisJobQueueExecutor executor,
+    QuestionRepository? questionRepository,
     AnalysisPlanner planner = const AnalysisPlanner(),
     String Function()? runIdFactory,
   })  : _pipeline = QuestionAnalysisPipeline(service),
         _settingsRepository = settingsRepository,
         _repository = repository,
         _executor = executor,
+        _questionRepository = questionRepository,
         _planner = planner,
         _runIdFactory = runIdFactory ??
             (() => DateTime.now().microsecondsSinceEpoch.toString());
@@ -141,6 +146,7 @@ class QueuedQuestionAnalysisCoordinator
   final SettingsRepository _settingsRepository;
   final AnalysisJobRepository _repository;
   final AnalysisJobQueueExecutor _executor;
+  final QuestionRepository? _questionRepository;
   final AnalysisPlanner _planner;
   final String Function() _runIdFactory;
 
@@ -283,6 +289,16 @@ class QueuedQuestionAnalysisCoordinator
       handle.parentQuestionId,
       handle.firstPassJobId,
     );
+    if (completed == null) {
+      final autoSaved =
+          await _questionRepository?.getById(handle.parentQuestionId);
+      if (autoSaved != null &&
+          autoSaved.contentStatus == ContentStatus.ready &&
+          autoSaved.analysisResult != null) {
+        return autoSaved;
+      }
+      throw AiAnalysisException('AI 解析任务已结束，请返回错题本查看或重试');
+    }
     if (completed.status != AnalysisJobStatus.completed ||
         completed.resultJson == null) {
       throw AiAnalysisException(
@@ -488,16 +504,51 @@ class QueuedQuestionAnalysisCoordinator
     };
   }
 
-  Future<AnalysisJob> _waitForTerminal(
+  Future<AnalysisJob?> _waitForTerminal(
     String parentQuestionId,
     String jobId,
   ) async {
-    final jobs = await _repository
-        .watchByParentQuestionId(parentQuestionId)
-        .firstWhere((items) => items.any(
-              (job) => job.id == jobId && job.isTerminal,
-            ));
-    return jobs.firstWhere((job) => job.id == jobId);
+    final completer = Completer<AnalysisJob?>();
+    late final StreamSubscription<AnalysisJob> completedSub;
+    late final StreamSubscription<List<AnalysisJob>> repoSub;
+
+    void finish(AnalysisJob? job) {
+      if (!completer.isCompleted) {
+        completer.complete(job);
+      }
+    }
+
+    completedSub = _executor.completedJobs.listen((job) {
+      if (job.id == jobId && job.isTerminal) {
+        finish(job);
+      }
+    });
+
+    repoSub = _repository.watchByParentQuestionId(parentQuestionId).listen(
+      (items) {
+        for (final job in items) {
+          if (job.id == jobId && job.isTerminal) {
+            finish(job);
+            return;
+          }
+        }
+        if (items.every((job) => job.id != jobId)) {
+          finish(null);
+        }
+      },
+      onError: (Object error, StackTrace stack) {
+        if (!completer.isCompleted) {
+          completer.completeError(error, stack);
+        }
+      },
+    );
+
+    try {
+      return await completer.future;
+    } finally {
+      await completedSub.cancel();
+      await repoSub.cancel();
+    }
   }
 
   Map<String, dynamic> _decodeMap(String source) {

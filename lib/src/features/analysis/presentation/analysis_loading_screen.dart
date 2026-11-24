@@ -1,15 +1,23 @@
 import 'dart:async';
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:smart_wrong_notebook/src/app/providers.dart';
+import 'package:smart_wrong_notebook/src/common/widgets/editorial_surface.dart';
 import 'package:smart_wrong_notebook/src/data/remote/ai/ai_analysis_service.dart';
 import 'package:smart_wrong_notebook/src/data/services/question_analysis_coordinator.dart';
+import 'package:smart_wrong_notebook/src/data/services/single_question_auto_save.dart';
 import 'package:smart_wrong_notebook/src/domain/models/question_record.dart';
 
 class AnalysisLoadingScreen extends ConsumerStatefulWidget {
-  const AnalysisLoadingScreen({super.key});
+  const AnalysisLoadingScreen({
+    super.key,
+    this.isReanalysis = false,
+  });
+
+  final bool isReanalysis;
 
   @override
   ConsumerState<AnalysisLoadingScreen> createState() =>
@@ -19,12 +27,24 @@ class AnalysisLoadingScreen extends ConsumerStatefulWidget {
 class _AnalysisLoadingScreenState extends ConsumerState<AnalysisLoadingScreen> {
   String? _errorMessage;
   String? _debugInfo;
+  bool _showDebugInfo = false;
   int _step = 0;
   String? _progressText;
   bool _canContinueInBackground = false;
   Timer? _stepTimer;
 
-  final _steps = const ['正在识别题目...', '正在理解题意...', '正在生成解析...', '即将完成...'];
+  static const List<String> _steps = <String>[
+    '正在识别题目...',
+    '正在理解题意...',
+    '正在生成解析...',
+    '即将完成...',
+  ];
+
+  static const List<String> _stageLabels = <String>[
+    '识别题干与公式',
+    '拆解考点与错因',
+    '生成分步解答',
+  ];
 
   @override
   void initState() {
@@ -61,22 +81,24 @@ class _AnalysisLoadingScreenState extends ConsumerState<AnalysisLoadingScreen> {
       return;
     }
 
-    // 检查配置并显示调试信息
     final settingsRepo = ref.read(settingsRepositoryProvider);
     final config = await settingsRepo.getAiProviderConfig();
 
-    String debugInfo = '配置状态:\n';
-    debugInfo += '- 配置对象: ${config != null ? "存在" : "为空"}\n';
+    final buffer = StringBuffer()
+      ..writeln('配置状态:')
+      ..writeln('- 配置对象: ${config != null ? "存在" : "为空"}');
     if (config != null) {
-      debugInfo +=
-          '- baseUrl: ${config.baseUrl.isNotEmpty ? config.baseUrl : "(空)"}\n';
-      debugInfo +=
-          '- model: ${config.model.isNotEmpty ? config.model : "(空)"}\n';
-      debugInfo +=
-          '- apiKey: ${config.apiKey.isNotEmpty ? "[已设置(${config.apiKey.length}字符)]" : "(空)"}\n';
+      buffer
+        ..writeln(
+            '- baseUrl: ${config.baseUrl.isNotEmpty ? config.baseUrl : "(空)"}')
+        ..writeln(
+            '- model: ${config.model.isNotEmpty ? config.model : "(空)"}')
+        ..writeln(
+            '- apiKey: ${config.apiKey.isNotEmpty ? "[已设置(${config.apiKey.length}字符)]" : "(空)"}');
     } else {
-      debugInfo += '\n请到设置中配置 AI 服务';
+      buffer.writeln('\n请到设置中配置 AI 服务');
     }
+    final debugInfo = buffer.toString();
 
     if (!mounted) return;
     setState(() => _debugInfo = debugInfo);
@@ -110,9 +132,46 @@ class _AnalysisLoadingScreenState extends ConsumerState<AnalysisLoadingScreen> {
       if (!mounted) return;
       final activeQuestion = ref.read(currentQuestionProvider);
       if (activeQuestion?.id != current.id) return;
-      ref.read(currentQuestionProvider.notifier).state = updated;
 
       _stepTimer?.cancel();
+
+      // Plan A: single question -> auto-save idempotently and land directly on
+      // QuestionDetailScreen; >1 questions -> go to AnalysisResultScreen for
+      // per-question review and split confirmation.
+      if (!isMultiQuestionAnalysisResult(updated)) {
+        final saved = await autoSaveSingleQuestion(
+          analyzed: updated,
+          repository: ref.read(questionRepositoryProvider),
+        );
+        try {
+          await ref
+              .read(scanTaskLifecycleServiceProvider)
+              .completeSaved(saved.id);
+        } catch (_) {
+          // Saved notebook record remains authoritative.
+        }
+        if (!mounted) return;
+        final latestActive = ref.read(currentQuestionProvider);
+        if (latestActive?.id != current.id) return;
+
+        invalidateQuestionList(ref);
+        ref.invalidate(scanTaskCountProvider);
+        ref.read(currentQuestionProvider.notifier).state = saved;
+        final messenger = ScaffoldMessenger.maybeOf(context);
+        context.go('/notebook/question/${saved.id}');
+        messenger?.hideCurrentSnackBar();
+        messenger?.showSnackBar(
+          SnackBar(
+            content: Text(
+              widget.isReanalysis ? '已重新解析并更新错题' : '已自动保存到错题本',
+            ),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+        return;
+      }
+
+      ref.read(currentQuestionProvider.notifier).state = updated;
       context.go('/analysis/result');
     } on AiAnalysisException catch (e) {
       if (mounted) {
@@ -121,24 +180,44 @@ class _AnalysisLoadingScreenState extends ConsumerState<AnalysisLoadingScreen> {
           _debugInfo = debugInfo;
         });
       }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _errorMessage = '解析失败：$e';
+          _debugInfo = debugInfo;
+        });
+      }
     }
+  }
+
+  void _handleBack() {
+    final current = ref.read(currentQuestionProvider);
+    if (widget.isReanalysis && current != null) {
+      context.go('/notebook/question/${current.id}');
+      return;
+    }
+    context.go('/');
   }
 
   @override
   Widget build(BuildContext context) {
+    final p = EditorialPalette.of(context);
     return Scaffold(
+      backgroundColor: p.canvas,
       appBar: AppBar(
-        title: const Text('AI 解析'),
+        title: Text(widget.isReanalysis ? '重新解析' : 'AI 解析'),
         leading: IconButton(
           icon: const Icon(CupertinoIcons.chevron_left),
-          onPressed: () => context.go('/capture/correction'),
+          onPressed: _handleBack,
         ),
       ),
       body: _errorMessage != null
-          ? _buildErrorView()
+          ? _buildErrorView(context, p)
           : _LoadingView(
               step: _step,
               steps: _steps,
+              stageLabels: _stageLabels,
+              isReanalysis: widget.isReanalysis,
               progressText: _progressText,
               onContinueInBackground:
                   _canContinueInBackground ? () => context.go('/') : null,
@@ -146,75 +225,105 @@ class _AnalysisLoadingScreenState extends ConsumerState<AnalysisLoadingScreen> {
     );
   }
 
-  Widget _buildErrorView() {
+  Widget _buildErrorView(BuildContext context, EditorialPalette p) {
     return Center(
       child: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            Container(
-              width: 64,
-              height: 64,
-              decoration: BoxDecoration(
-                color: Theme.of(context).brightness == Brightness.dark
-                    ? const Color(0xFFEA580C).withValues(alpha: 0.16)
-                    : const Color(0xFFFFF7ED),
-                borderRadius: BorderRadius.circular(32),
-              ),
-              child: const Icon(
-                CupertinoIcons.exclamationmark_circle,
-                color: Color(0xFFEA580C),
-                size: 32,
-              ),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              _errorMessage!,
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 14, color: Color(0xFF9A3412)),
-            ),
-            const SizedBox(height: 24),
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surface,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                    color: Theme.of(context).colorScheme.outlineVariant),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  const Text('调试信息:',
-                      style:
-                          TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                  const SizedBox(height: 8),
-                  SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Text(_debugInfo ?? '',
-                        style: const TextStyle(
-                            fontSize: 11, fontFamily: 'monospace')),
+        child: EditorialCard(
+          accentColor: p.terracotta,
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Center(
+                child: Container(
+                  width: 56,
+                  height: 56,
+                  decoration: BoxDecoration(
+                    color: p.terracottaTint,
+                    borderRadius: BorderRadius.circular(16),
                   ),
-                ],
+                  child: Icon(
+                    CupertinoIcons.exclamationmark_circle,
+                    color: p.terracotta,
+                    size: 28,
+                  ),
+                ),
               ),
-            ),
-            const SizedBox(height: 20),
-            FilledButton(
-              onPressed: () {
-                setState(() {
-                  _errorMessage = null;
-                  _progressText = null;
-                  _step = 0;
-                  _canContinueInBackground = false;
-                });
-                _runAnalysis();
-                _animateSteps();
-              },
-              style: FilledButton.styleFrom(minimumSize: const Size(120, 40)),
-              child: const Text('重试'),
-            ),
-          ],
+              const SizedBox(height: 16),
+              Text(
+                '本次解析未能完成',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w700,
+                  color: p.inkPrimary,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                _errorMessage!,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 13.5,
+                  height: 1.55,
+                  color: p.inkSecondary,
+                ),
+              ),
+              const SizedBox(height: 20),
+              FilledButton.icon(
+                onPressed: () {
+                  setState(() {
+                    _errorMessage = null;
+                    _progressText = null;
+                    _step = 0;
+                    _canContinueInBackground = false;
+                  });
+                  _runAnalysis();
+                  _animateSteps();
+                },
+                icon: const Icon(CupertinoIcons.refresh, size: 17),
+                label: const Text('重试'),
+              ),
+              const SizedBox(height: 10),
+              OutlinedButton(
+                onPressed: _handleBack,
+                child: Text(widget.isReanalysis ? '返回错题详情' : '返回首页'),
+              ),
+              if ((_debugInfo ?? '').isNotEmpty) ...<Widget>[
+                const SizedBox(height: 12),
+                TextButton(
+                  onPressed: () =>
+                      setState(() => _showDebugInfo = !_showDebugInfo),
+                  child: Text(
+                    _showDebugInfo ? '收起诊断信息' : '查看诊断信息',
+                    style: TextStyle(fontSize: 12.5, color: p.inkMuted),
+                  ),
+                ),
+                if (_showDebugInfo)
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: p.subtle,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: p.hairline),
+                    ),
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Text(
+                        _debugInfo!,
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontFamily: 'monospace',
+                          color: p.inkSecondary,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ],
+          ),
         ),
       ),
     );
@@ -225,12 +334,16 @@ class _LoadingView extends StatefulWidget {
   const _LoadingView({
     required this.step,
     required this.steps,
+    required this.stageLabels,
+    required this.isReanalysis,
     this.progressText,
     this.onContinueInBackground,
   });
 
   final int step;
   final List<String> steps;
+  final List<String> stageLabels;
+  final bool isReanalysis;
   final String? progressText;
   final VoidCallback? onContinueInBackground;
 
@@ -240,76 +353,194 @@ class _LoadingView extends StatefulWidget {
 
 class _LoadingViewState extends State<_LoadingView>
     with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
+  late final AnimationController _pulseController;
 
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(
-      duration: const Duration(seconds: 3),
+    _pulseController = AnimationController(
+      duration: const Duration(milliseconds: 1800),
       vsync: this,
-    )..repeat();
+    )..repeat(reverse: true);
   }
 
   @override
   void dispose() {
-    _controller.dispose();
+    _pulseController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    final p = EditorialPalette.of(context);
+    final activeStage = widget.step.clamp(0, widget.stageLabels.length - 1);
+
     return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
-            Container(
-              width: 88,
-              height: 88,
-              decoration: BoxDecoration(
-                color: Theme.of(context).brightness == Brightness.dark
-                    ? const Color(0xFF6366F1).withValues(alpha: 0.18)
-                    : const Color(0xFFEEF2FF),
-                borderRadius: BorderRadius.circular(44),
+            EditorialCard(
+              padding: const EdgeInsets.fromLTRB(22, 28, 22, 24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  AnimatedBuilder(
+                    animation: _pulseController,
+                    builder: (_, __) {
+                      final scale = 0.94 + _pulseController.value * 0.08;
+                      final ringAlpha = 0.14 + _pulseController.value * 0.14;
+                      return SizedBox(
+                        width: 84,
+                        height: 84,
+                        child: Stack(
+                          alignment: Alignment.center,
+                          children: <Widget>[
+                            Transform.scale(
+                              scale: scale,
+                              child: Container(
+                                width: 78,
+                                height: 78,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: p.cobalt.withValues(alpha: ringAlpha),
+                                ),
+                              ),
+                            ),
+                            Container(
+                              width: 56,
+                              height: 56,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: p.cobaltTint,
+                              ),
+                              child: Icon(
+                                CupertinoIcons.sparkles,
+                                size: 26,
+                                color: p.cobalt,
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 20),
+                  Text(
+                    widget.progressText ?? widget.steps[widget.step],
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 16.5,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: -0.2,
+                      color: p.inkPrimary,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    widget.progressText != null
+                        ? '识别到多道题，完成后进入拆分保存'
+                        : widget.isReanalysis
+                            ? '重新解析完成后将原地更新这道错题'
+                            : '单题解析完成后将自动存入错题本',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      height: 1.5,
+                      color: p.inkSecondary,
+                    ),
+                  ),
+                  const SizedBox(height: 22),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(999),
+                    child: LinearProgressIndicator(
+                      minHeight: 4,
+                      backgroundColor: p.subtle,
+                      color: p.cobalt,
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  ...widget.stageLabels.asMap().entries.map((entry) {
+                    final index = entry.key;
+                    final label = entry.value;
+                    final done =
+                        widget.progressText == null && index < activeStage;
+                    final current =
+                        widget.progressText == null && index == activeStage;
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 5),
+                      child: Row(
+                        children: <Widget>[
+                          SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: Center(
+                              child: done
+                                  ? Icon(
+                                      CupertinoIcons.checkmark_circle_fill,
+                                      size: 16,
+                                      color: p.emerald,
+                                    )
+                                  : current
+                                      ? SizedBox(
+                                          width: 14,
+                                          height: 14,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                            color: p.cobalt,
+                                          ),
+                                        )
+                                      : Container(
+                                          width: 7,
+                                          height: 7,
+                                          decoration: BoxDecoration(
+                                            shape: BoxShape.circle,
+                                            color: p.hairline,
+                                          ),
+                                        ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              label,
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: current || done
+                                    ? FontWeight.w600
+                                    : FontWeight.w400,
+                                color: done
+                                    ? p.inkSecondary
+                                    : current
+                                        ? p.inkPrimary
+                                        : p.inkMuted,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }),
+                ],
               ),
-              child: AnimatedBuilder(
-                animation: _controller,
-                builder: (_, __) => Transform.rotate(
-                  angle: _controller.value * 2 * 3.14159,
-                  child: const Icon(CupertinoIcons.smiley,
-                      size: 44, color: Color(0xFF6366F1)),
-                ),
-              ),
-            ),
-            const SizedBox(height: 28),
-            const CircularProgressIndicator(
-              strokeWidth: 3,
-              color: Color(0xFF6366F1),
-            ),
-            const SizedBox(height: 28),
-            Text(
-              widget.progressText ?? widget.steps[widget.step],
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
             ),
             if (widget.onContinueInBackground != null) ...<Widget>[
-              const SizedBox(height: 24),
-              OutlinedButton.icon(
-                onPressed: widget.onContinueInBackground,
-                icon: const Icon(CupertinoIcons.camera, size: 18),
-                label: const Text('继续录题'),
+              const SizedBox(height: 18),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: widget.onContinueInBackground,
+                  icon: const Icon(CupertinoIcons.camera, size: 17),
+                  label: const Text('继续录题'),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                '后台解析不会中断，单题完成后自动入库',
+                style: TextStyle(fontSize: 12, color: p.inkMuted),
               ),
             ],
-            const SizedBox(height: 8),
-            Text(
-              widget.progressText != null
-                  ? '多题依次分析中，请稍候...'
-                  : 'AI 正在生成学习分析，请稍候...',
-              style: TextStyle(
-                  fontSize: 12,
-                  color: Theme.of(context).colorScheme.onSurfaceVariant),
-            ),
           ],
         ),
       ),

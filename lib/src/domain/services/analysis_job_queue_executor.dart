@@ -45,15 +45,22 @@ class AnalysisJobQueueExecutor {
     this.terminalJobRetention = const Duration(days: 30),
     this.maintenanceInterval = const Duration(days: 1),
     DateTime Function()? now,
+    Future<void> Function(AnalysisJob completedJob)? onJobCompleted,
   })  : _repository = repository,
         _runner = runner,
-        _now = now ?? DateTime.now;
+        _now = now ?? DateTime.now,
+        _onJobCompleted = onJobCompleted;
 
   final AnalysisJobRepository _repository;
   final AnalysisJobRunner _runner;
   final Duration terminalJobRetention;
   final Duration maintenanceInterval;
   final DateTime Function() _now;
+  final Future<void> Function(AnalysisJob completedJob)? _onJobCompleted;
+  final StreamController<AnalysisJob> _completedJobsController =
+      StreamController<AnalysisJob>.broadcast();
+
+  Stream<AnalysisJob> get completedJobs => _completedJobsController.stream;
 
   Future<void>? _initializeFuture;
   Future<void>? _drainFuture;
@@ -145,6 +152,22 @@ class AnalysisJobQueueExecutor {
         ),
       ));
       await _repository.markCompleted(job.id, resultJson: result);
+      final completed = (await _repository.getById(job.id)) ??
+          job.copyWith(
+            status: AnalysisJobStatus.completed,
+            resultJson: result,
+          );
+      if (!_completedJobsController.isClosed) {
+        _completedJobsController.add(completed);
+      }
+      if (_onJobCompleted != null) {
+        try {
+          await _onJobCompleted(completed);
+        } catch (_) {
+          // Post-completion side effects must not mark an already completed AI
+          // job as failed.
+        }
+      }
     } on AnalysisJobExecutionException catch (error) {
       await _repository.recordFailure(
         job.id,

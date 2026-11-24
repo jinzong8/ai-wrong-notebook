@@ -97,15 +97,24 @@ GoRouter buildRouter(SettingsRepository settingsRepo) {
           pageBuilder: (_, __) =>
               _buildPage(const QuestionSplitConfirmationScreen())),
       GoRoute(
-          path: '/analysis/loading',
-          pageBuilder: (_, __) => _buildPage(const AnalysisLoadingScreen())),
+        path: '/analysis/loading',
+        pageBuilder: (_, state) => _buildPage(
+          AnalysisLoadingScreen(
+            isReanalysis: state.uri.queryParameters['reanalysis'] == '1',
+          ),
+        ),
+      ),
       GoRoute(
           path: '/analysis/result',
           pageBuilder: (_, __) => _buildPage(const AnalysisResultScreen())),
       GoRoute(
-          path: '/analysis/text-correction',
-          pageBuilder: (_, __) =>
-              _buildPage(const QuestionTextCorrectionScreen())),
+        path: '/analysis/text-correction',
+        pageBuilder: (_, state) => _buildPage(
+          QuestionTextCorrectionScreen(
+            returnToDetail: state.uri.queryParameters['from'] == 'detail',
+          ),
+        ),
+      ),
       GoRoute(
           path: '/exercise/practice',
           pageBuilder: (_, __) => _buildPage(const ExercisePracticeScreen())),

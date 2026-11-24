@@ -438,33 +438,28 @@ class _QuestionCard extends StatelessWidget {
                             children: allTags.take(5).map((tag) {
                               final isAiTag = aiTags.contains(tag);
                               final tagColor = isAiTag
-                                  ? const Color(0xFFD97706)
-                                  : const Color(0xFF4F46E5);
+                                  ? const Color(0xFFB45309)
+                                  : colorScheme.primary;
                               final tagBackground = isDark
                                   ? tagColor.withValues(alpha: 0.14)
                                   : isAiTag
-                                      ? const Color(0xFFFFF7ED)
-                                      : const Color(0xFFEEF2FF);
+                                      ? const Color(0xFFFEF6E4)
+                                      : const Color(0xFFEBF2FF);
                               return GestureDetector(
                                 onTap: () => onKnowledgePointTap(tag),
                                 child: Container(
                                   padding: const EdgeInsets.symmetric(
-                                      horizontal: 6, vertical: 2),
+                                      horizontal: 7, vertical: 2.5),
                                   decoration: BoxDecoration(
                                     color: tagBackground,
                                     borderRadius: BorderRadius.circular(6),
-                                    border: Border.all(
-                                      color: isDark
-                                          ? tagColor.withValues(alpha: 0.22)
-                                          : colorScheme.outlineVariant
-                                              .withValues(alpha: 0.5),
-                                    ),
                                   ),
                                   child: MathContentView(
                                     tag,
                                     mode: MathContentViewMode.compact,
                                     style: TextStyle(
-                                      fontSize: 10,
+                                      fontSize: 10.5,
+                                      fontWeight: FontWeight.w500,
                                       color: isDark
                                           ? colorScheme.onSurface
                                           : tagColor,

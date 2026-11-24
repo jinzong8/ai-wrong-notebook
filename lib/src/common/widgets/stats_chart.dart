@@ -1,5 +1,6 @@
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
+import 'package:smart_wrong_notebook/src/common/widgets/editorial_surface.dart';
 import 'package:smart_wrong_notebook/src/domain/models/mastery_level.dart';
 
 class StatsBarChart extends StatelessWidget {
@@ -202,8 +203,7 @@ class StatsGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final p = EditorialPalette.of(context);
 
     return Column(
       children: <Widget>[
@@ -213,57 +213,38 @@ class StatsGrid extends StatelessWidget {
               child: _StatCard(
                 label: '题库总量',
                 value: '$total',
-                bg: const Color(0xFFEFF6FF),
-                darkBg: const Color(0xFF2563EB).withValues(alpha: 0.14),
-                border: const Color(0xFFBFDBFE),
-                darkBorder: const Color(0xFF2563EB).withValues(alpha: 0.35),
-                text: const Color(0xFF2563EB),
+                accent: p.cobalt,
                 onTap: onTotalTap,
               ),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: 10),
             Expanded(
               child: _StatCard(
                 label: '今日新增',
                 value: '$todayNew',
-                bg: const Color(0xFFF9FAFB),
-                darkBg: colorScheme.onSurfaceVariant.withValues(alpha: 0.12),
-                border: const Color(0xFFE5E7EB),
-                darkBorder:
-                    colorScheme.onSurfaceVariant.withValues(alpha: 0.28),
-                text: isDark
-                    ? colorScheme.onSurfaceVariant
-                    : const Color(0xFF6B7280),
+                accent: p.inkSecondary,
                 onTap: onTodayNewTap,
               ),
             ),
           ],
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 10),
         Row(
           children: <Widget>[
             Expanded(
               child: _StatCard(
                 label: '已掌握',
                 value: '$mastered',
-                bg: const Color(0xFFF0FDF4),
-                darkBg: const Color(0xFF16A34A).withValues(alpha: 0.14),
-                border: const Color(0xFFBBF7D0),
-                darkBorder: const Color(0xFF16A34A).withValues(alpha: 0.35),
-                text: const Color(0xFF16A34A),
+                accent: p.emerald,
                 onTap: onMasteredTap,
               ),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: 10),
             Expanded(
               child: _StatCard(
                 label: '待复习',
                 value: '$pending',
-                bg: const Color(0xFFFFF7ED),
-                darkBg: const Color(0xFFEA580C).withValues(alpha: 0.14),
-                border: const Color(0xFFFED7AA),
-                darkBorder: const Color(0xFFEA580C).withValues(alpha: 0.35),
-                text: const Color(0xFFEA580C),
+                accent: p.terracotta,
                 onTap: onPendingTap,
               ),
             ),
@@ -278,63 +259,63 @@ class _StatCard extends StatelessWidget {
   const _StatCard({
     required this.label,
     required this.value,
-    required this.bg,
-    required this.darkBg,
-    required this.border,
-    required this.darkBorder,
-    required this.text,
+    required this.accent,
     this.onTap,
   });
 
   final String label;
   final String value;
-  final Color bg;
-  final Color darkBg;
-  final Color border;
-  final Color darkBorder;
-  final Color text;
+  final Color accent;
   final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final p = EditorialPalette.of(context);
 
-    return Material(
-      color: isDark ? darkBg : bg,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(8),
-        side: BorderSide(color: isDark ? darkBorder : border),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Column(
+    return EditorialCard(
+      onTap: onTap,
+      borderRadius: 14,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
             children: <Widget>[
-              Text(
-                value,
-                style: TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.bold,
-                  color: text,
+              Container(
+                width: 7,
+                height: 7,
+                decoration: BoxDecoration(
+                  color: accent,
+                  shape: BoxShape.circle,
                 ),
               ),
-              const SizedBox(height: 2),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  Text(label, style: TextStyle(fontSize: 11, color: text)),
-                  if (onTap != null) ...<Widget>[
-                    const SizedBox(width: 2),
-                    Icon(Icons.chevron_right, size: 14, color: text),
-                  ],
-                ],
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: p.inkSecondary,
+                  ),
+                ),
               ),
+              if (onTap != null)
+                Icon(Icons.chevron_right, size: 15, color: p.inkMuted),
             ],
           ),
-        ),
+          const SizedBox(height: 8),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 24,
+              fontWeight: FontWeight.w700,
+              letterSpacing: -0.6,
+              color: p.inkPrimary,
+              fontFeatures: const <FontFeature>[FontFeature.tabularFigures()],
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -9,11 +10,15 @@ import 'package:smart_wrong_notebook/src/data/repositories/drift_settings_reposi
 import 'package:smart_wrong_notebook/src/data/repositories/drift_question_repository.dart';
 import 'package:smart_wrong_notebook/src/data/repositories/drift_ai_conversation_repository.dart';
 import 'package:smart_wrong_notebook/src/data/repositories/drift_analysis_job_repository.dart';
-import 'package:smart_wrong_notebook/src/data/local/app_database.dart';
+import 'package:smart_wrong_notebook/src/data/local/app_database.dart'
+    hide QuestionRecord;
 import 'package:smart_wrong_notebook/src/data/remote/ai/ai_analysis_service.dart';
 import 'package:smart_wrong_notebook/src/data/services/app_analysis_job_runner.dart';
 import 'package:smart_wrong_notebook/src/data/services/ai_learning_task_coordinator.dart';
 import 'package:smart_wrong_notebook/src/data/services/question_analysis_coordinator.dart';
+import 'package:smart_wrong_notebook/src/data/services/single_question_auto_save.dart';
+import 'package:smart_wrong_notebook/src/domain/models/ai_task_spec.dart';
+import 'package:smart_wrong_notebook/src/domain/models/question_record.dart';
 import 'package:smart_wrong_notebook/src/domain/services/analysis_job_queue_executor.dart';
 import 'package:smart_wrong_notebook/src/app/theme/app_theme.dart';
 import 'package:smart_wrong_notebook/src/features/home/presentation/home_screen.dart';
@@ -49,6 +54,7 @@ void main() async {
   final aiConversationRepo = DriftAiConversationRepository(db);
   final aiService = AiAnalysisService(settingsRepository: settingsRepo);
   final analysisJobRepo = DriftAnalysisJobRepository(db);
+  final backgroundQuestionVersion = ValueNotifier<int>(0);
   final analysisJobExecutor = AnalysisJobQueueExecutor(
     repository: analysisJobRepo,
     runner: AppAnalysisJobRunner(
@@ -56,12 +62,39 @@ void main() async {
       questionRepository: questionRepo,
       analysisJobRepository: analysisJobRepo,
     ),
+    onJobCompleted: (completedJob) async {
+      if (completedJob.taskSpec.type != AiTaskType.firstPassAnalysis) return;
+      final resultJson = completedJob.resultJson;
+      if (resultJson == null || resultJson.isEmpty) return;
+      try {
+        final decoded = jsonDecode(resultJson);
+        if (decoded is! Map) return;
+        final record = QuestionRecord.fromJson(
+          Map<String, dynamic>.from(decoded),
+        );
+        if (isMultiQuestionAnalysisResult(record)) return;
+
+        // Ensure idempotent persistence and clear the pending background task
+        // so single questions flow straight into the notebook without piling up
+        // as "待确认".
+        await autoSaveSingleQuestion(
+          analyzed: record,
+          repository: questionRepo,
+        );
+        await analysisJobRepo
+            .deleteByParentQuestionId(completedJob.taskSpec.parentQuestionId);
+        backgroundQuestionVersion.value++;
+      } catch (_) {
+        // Keep the completed job intact if parsing fails unexpectedly.
+      }
+    },
   );
   final questionAnalysisCoordinator = QueuedQuestionAnalysisCoordinator(
     service: aiService,
     settingsRepository: settingsRepo,
     repository: analysisJobRepo,
     executor: analysisJobExecutor,
+    questionRepository: questionRepo,
   );
   final aiLearningTaskCoordinator = QueuedAiLearningTaskCoordinator(
     settingsRepository: settingsRepo,
@@ -130,14 +163,19 @@ void main() async {
           path: '/capture/split-confirmation',
           builder: (context, state) => const QuestionSplitConfirmationScreen()),
       GoRoute(
-          path: '/analysis/loading',
-          builder: (context, state) => const AnalysisLoadingScreen()),
+        path: '/analysis/loading',
+        builder: (context, state) => AnalysisLoadingScreen(
+          isReanalysis: state.uri.queryParameters['reanalysis'] == '1',
+        ),
+      ),
       GoRoute(
           path: '/analysis/result',
           builder: (context, state) => const AnalysisResultScreen()),
       GoRoute(
         path: '/analysis/text-correction',
-        builder: (context, state) => const QuestionTextCorrectionScreen(),
+        builder: (context, state) => QuestionTextCorrectionScreen(
+          returnToDetail: state.uri.queryParameters['from'] == 'detail',
+        ),
       ),
       GoRoute(
           path: '/exercise/practice',
@@ -168,6 +206,8 @@ void main() async {
         questionRepositoryProvider.overrideWithValue(questionRepo),
         aiConversationRepositoryProvider.overrideWithValue(aiConversationRepo),
         analysisJobRepositoryProvider.overrideWithValue(analysisJobRepo),
+        backgroundQuestionVersionNotifierProvider
+            .overrideWithValue(backgroundQuestionVersion),
         aiAnalysisServiceProvider.overrideWithValue(aiService),
         questionAnalysisCoordinatorProvider
             .overrideWithValue(questionAnalysisCoordinator),

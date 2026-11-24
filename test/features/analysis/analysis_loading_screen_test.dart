@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:smart_wrong_notebook/src/app/providers.dart';
 import 'package:smart_wrong_notebook/src/data/remote/ai/ai_analysis_service.dart';
+import 'package:smart_wrong_notebook/src/data/repositories/question_repository.dart';
 import 'package:smart_wrong_notebook/src/data/repositories/settings_repository.dart';
 import 'package:smart_wrong_notebook/src/data/services/question_analysis_coordinator.dart';
 import 'package:smart_wrong_notebook/src/data/services/question_analysis_pipeline.dart';
@@ -231,9 +232,11 @@ void main() {
     expect(container.read(currentQuestionProvider)?.id, 'question-2');
   });
 
-  testWidgets('loading screen extracts before analysis when text is empty',
+  testWidgets(
+      'loading screen extracts before analysis when text is empty and auto-saves single question',
       (tester) async {
     final settingsRepo = _TestSettingsRepository();
+    final questionRepo = InMemoryQuestionRepository();
     final service = TestAiAnalysisService(
       settingsRepository: settingsRepo,
       extractionResult: const AiQuestionExtractionResult(
@@ -267,6 +270,7 @@ void main() {
     final container = ProviderContainer(
       overrides: [
         settingsRepositoryProvider.overrideWithValue(settingsRepo),
+        questionRepositoryProvider.overrideWithValue(questionRepo),
         aiAnalysisServiceProvider.overrideWithValue(service),
       ],
     );
@@ -291,8 +295,15 @@ void main() {
           path: '/analysis/result',
           builder: (_, __) => const Scaffold(body: Text('RESULT_SCREEN')),
         ),
+        GoRoute(
+          path: '/notebook/question/:id',
+          builder: (_, state) => Scaffold(
+            body: Text('DETAIL_SCREEN_${state.pathParameters['id']}'),
+          ),
+        ),
       ],
     );
+    addTearDown(router.dispose);
 
     await tester.pumpWidget(UncontrolledProviderScope(
       container: container,
@@ -302,17 +313,22 @@ void main() {
     await tester.pump();
     await tester.pumpAndSettle();
 
-    expect(find.text('RESULT_SCREEN'), findsOneWidget);
+    expect(find.text('DETAIL_SCREEN_q-1'), findsOneWidget);
     expect(service.extractionCallCount, 1);
     expect(service.analysisCallCount, 1);
+
+    final saved = await questionRepo.listAll();
+    expect(saved, hasLength(1));
+    expect(saved.single.id, 'q-1');
+    expect(saved.single.parentQuestionId, isNull);
+    expect(saved.single.splitOrder, isNull);
 
     final updated = container.read(currentQuestionProvider);
     expect(updated, isNotNull);
     expect(updated!.subject, Subject.physics);
     expect(updated.extractedQuestionText, '原始题目文本');
     expect(updated.normalizedQuestionText, '整理后的题目文本');
-    expect(updated.splitResult, isNotNull);
-    expect(updated.splitResult?.strategy, QuestionSplitStrategy.fallback);
+    expect(updated.splitResult, isNull);
     expect(updated.contentStatus, ContentStatus.ready);
     expect(updated.analysisResult?.finalAnswer, '答案');
     expect(updated.extractedQuestionText,
@@ -320,9 +336,10 @@ void main() {
   });
 
   testWidgets(
-      'loading screen skips extraction when normalized text already exists',
+      'loading screen skips extraction when normalized text already exists and auto-saves single question',
       (tester) async {
     final settingsRepo = _TestSettingsRepository();
+    final questionRepo = InMemoryQuestionRepository();
     final service = TestAiAnalysisService(
       settingsRepository: settingsRepo,
       extractionResult: const AiQuestionExtractionResult(
@@ -344,6 +361,7 @@ void main() {
     final container = ProviderContainer(
       overrides: [
         settingsRepositoryProvider.overrideWithValue(settingsRepo),
+        questionRepositoryProvider.overrideWithValue(questionRepo),
         aiAnalysisServiceProvider.overrideWithValue(service),
       ],
     );
@@ -368,8 +386,15 @@ void main() {
           path: '/analysis/result',
           builder: (_, __) => const Scaffold(body: Text('RESULT_SCREEN')),
         ),
+        GoRoute(
+          path: '/notebook/question/:id',
+          builder: (_, state) => Scaffold(
+            body: Text('DETAIL_SCREEN_${state.pathParameters['id']}'),
+          ),
+        ),
       ],
     );
+    addTearDown(router.dispose);
 
     await tester.pumpWidget(UncontrolledProviderScope(
       container: container,
@@ -379,9 +404,10 @@ void main() {
     await tester.pump();
     await tester.pumpAndSettle();
 
-    expect(find.text('RESULT_SCREEN'), findsOneWidget);
+    expect(find.text('DETAIL_SCREEN_q-2'), findsOneWidget);
     expect(service.extractionCallCount, 0);
     expect(service.analysisCallCount, 1);
+    expect(await questionRepo.listAll(), hasLength(1));
 
     final updated = container.read(currentQuestionProvider);
     expect(updated, isNotNull);
@@ -802,6 +828,7 @@ void main() {
   testWidgets('loading screen analyzes extracted text without resending image',
       (tester) async {
     final settingsRepo = _TestSettingsRepository();
+    final questionRepo = InMemoryQuestionRepository();
     final service = TestAiAnalysisService(
       settingsRepository: settingsRepo,
       extractionResult: const AiQuestionExtractionResult(
@@ -823,6 +850,7 @@ void main() {
     final container = ProviderContainer(
       overrides: [
         settingsRepositoryProvider.overrideWithValue(settingsRepo),
+        questionRepositoryProvider.overrideWithValue(questionRepo),
         aiAnalysisServiceProvider.overrideWithValue(service),
       ],
     );
@@ -847,8 +875,15 @@ void main() {
           path: '/analysis/result',
           builder: (_, __) => const Scaffold(body: Text('RESULT_SCREEN')),
         ),
+        GoRoute(
+          path: '/notebook/question/:id',
+          builder: (_, state) => Scaffold(
+            body: Text('DETAIL_SCREEN_${state.pathParameters['id']}'),
+          ),
+        ),
       ],
     );
+    addTearDown(router.dispose);
 
     await tester.pumpWidget(UncontrolledProviderScope(
       container: container,
@@ -858,6 +893,7 @@ void main() {
     await tester.pump();
     await tester.pumpAndSettle();
 
+    expect(find.text('DETAIL_SCREEN_q-text-only'), findsOneWidget);
     expect(service.extractionCallCount, 1);
     expect(service.analysisCallCount, 1);
     expect(service.analysisImageCallCount, 0);
@@ -866,6 +902,7 @@ void main() {
   testWidgets('loading screen uses image fallback for visual questions',
       (tester) async {
     final settingsRepo = _TestSettingsRepository();
+    final questionRepo = InMemoryQuestionRepository();
     final service = TestAiAnalysisService(
       settingsRepository: settingsRepo,
       extractionResult: const AiQuestionExtractionResult(
@@ -887,6 +924,7 @@ void main() {
     final container = ProviderContainer(
       overrides: [
         settingsRepositoryProvider.overrideWithValue(settingsRepo),
+        questionRepositoryProvider.overrideWithValue(questionRepo),
         aiAnalysisServiceProvider.overrideWithValue(service),
       ],
     );
@@ -911,8 +949,15 @@ void main() {
           path: '/analysis/result',
           builder: (_, __) => const Scaffold(body: Text('RESULT_SCREEN')),
         ),
+        GoRoute(
+          path: '/notebook/question/:id',
+          builder: (_, state) => Scaffold(
+            body: Text('DETAIL_SCREEN_${state.pathParameters['id']}'),
+          ),
+        ),
       ],
     );
+    addTearDown(router.dispose);
 
     await tester.pumpWidget(UncontrolledProviderScope(
       container: container,
@@ -922,6 +967,7 @@ void main() {
     await tester.pump();
     await tester.pumpAndSettle();
 
+    expect(find.text('DETAIL_SCREEN_q-image-fallback'), findsOneWidget);
     expect(service.extractionCallCount, 1);
     expect(service.analysisCallCount, 1);
     expect(service.analysisImageCallCount, 1);
@@ -930,6 +976,7 @@ void main() {
   testWidgets('loading screen keeps complete geometry text analysis text-only',
       (tester) async {
     final settingsRepo = _TestSettingsRepository();
+    final questionRepo = InMemoryQuestionRepository();
     final service = TestAiAnalysisService(
       settingsRepository: settingsRepo,
       extractionResult: const AiQuestionExtractionResult(
@@ -951,6 +998,7 @@ void main() {
     final container = ProviderContainer(
       overrides: [
         settingsRepositoryProvider.overrideWithValue(settingsRepo),
+        questionRepositoryProvider.overrideWithValue(questionRepo),
         aiAnalysisServiceProvider.overrideWithValue(service),
       ],
     );
@@ -975,8 +1023,15 @@ void main() {
           path: '/analysis/result',
           builder: (_, __) => const Scaffold(body: Text('RESULT_SCREEN')),
         ),
+        GoRoute(
+          path: '/notebook/question/:id',
+          builder: (_, state) => Scaffold(
+            body: Text('DETAIL_SCREEN_${state.pathParameters['id']}'),
+          ),
+        ),
       ],
     );
+    addTearDown(router.dispose);
 
     await tester.pumpWidget(UncontrolledProviderScope(
       container: container,
@@ -986,6 +1041,7 @@ void main() {
     await tester.pump();
     await tester.pumpAndSettle();
 
+    expect(find.text('DETAIL_SCREEN_q-geometry-text-only'), findsOneWidget);
     expect(service.extractionCallCount, 1);
     expect(service.analysisCallCount, 1);
     expect(service.analysisImageCallCount, 0);
@@ -994,6 +1050,7 @@ void main() {
   testWidgets('loading screen analyzes language worksheet images directly',
       (tester) async {
     final settingsRepo = _TestSettingsRepository();
+    final questionRepo = InMemoryQuestionRepository();
     final service = TestAiAnalysisService(
       settingsRepository: settingsRepo,
       extractionResult: const AiQuestionExtractionResult(
@@ -1015,6 +1072,7 @@ void main() {
     final container = ProviderContainer(
       overrides: [
         settingsRepositoryProvider.overrideWithValue(settingsRepo),
+        questionRepositoryProvider.overrideWithValue(questionRepo),
         aiAnalysisServiceProvider.overrideWithValue(service),
       ],
     );
@@ -1039,8 +1097,15 @@ void main() {
           path: '/analysis/result',
           builder: (_, __) => const Scaffold(body: Text('RESULT_SCREEN')),
         ),
+        GoRoute(
+          path: '/notebook/question/:id',
+          builder: (_, state) => Scaffold(
+            body: Text('DETAIL_SCREEN_${state.pathParameters['id']}'),
+          ),
+        ),
       ],
     );
+    addTearDown(router.dispose);
 
     await tester.pumpWidget(UncontrolledProviderScope(
       container: container,
@@ -1050,7 +1115,8 @@ void main() {
     await tester.pump();
     await tester.pumpAndSettle();
 
-    expect(find.text('RESULT_SCREEN'), findsOneWidget);
+    expect(find.text('DETAIL_SCREEN_q-language-image'), findsOneWidget);
+    expect(await questionRepo.listAll(), hasLength(1));
     expect(service.extractionCallCount, 0);
     expect(service.analysisCallCount, 1);
     expect(service.analysisImageCallCount, 1);

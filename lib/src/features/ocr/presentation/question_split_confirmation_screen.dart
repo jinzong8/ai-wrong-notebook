@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:smart_wrong_notebook/src/app/providers.dart';
+import 'package:smart_wrong_notebook/src/common/widgets/editorial_surface.dart';
 import 'package:smart_wrong_notebook/src/domain/models/question_record.dart';
 import 'package:smart_wrong_notebook/src/domain/models/question_split_session.dart';
 import 'package:smart_wrong_notebook/src/shared/widgets/math_content_view.dart';
@@ -27,6 +28,7 @@ class _QuestionSplitConfirmationScreenState
 
   @override
   Widget build(BuildContext context) {
+    final p = EditorialPalette.of(context);
     final session = ref.watch(currentQuestionSplitSessionProvider);
     final source = session?.source;
     final drafts = session?.drafts ?? const <QuestionSplitDraft>[];
@@ -36,13 +38,12 @@ class _QuestionSplitConfirmationScreenState
 
     if (session == null || source == null) {
       return Scaffold(
+        backgroundColor: p.canvas,
         appBar: AppBar(title: const Text('拆分保存')),
         body: const Center(child: Text('未找到待保存题目')),
       );
     }
 
-    final colorScheme = Theme.of(context).colorScheme;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     final safeIndex =
         drafts.isEmpty ? 0 : _activeIndex.clamp(0, drafts.length - 1);
     final activeDraft = drafts.isEmpty ? null : drafts[safeIndex];
@@ -50,6 +51,7 @@ class _QuestionSplitConfirmationScreenState
         drafts.where((draft) => draft.canSave && draft.selected).length;
 
     return Scaffold(
+      backgroundColor: p.canvas,
       appBar: AppBar(
         title: const Text('拆分保存'),
         leading: IconButton(
@@ -59,166 +61,116 @@ class _QuestionSplitConfirmationScreenState
       ),
       body: SafeArea(
         child: ListView(
-          padding: const EdgeInsets.all(24),
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
           children: <Widget>[
-            Container(
+            EditorialCard(
+              accentColor: p.cobalt,
               padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surface,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                    color: Theme.of(context).colorScheme.outlineVariant),
-              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  Row(
-                    children: <Widget>[
-                      Container(
-                        width: 36,
-                        height: 36,
-                        decoration: BoxDecoration(
-                          color: Theme.of(context).brightness == Brightness.dark
-                              ? const Color(0xFF4F46E5).withValues(alpha: 0.18)
-                              : const Color(0xFFEEF2FF),
-                          borderRadius: BorderRadius.circular(18),
-                        ),
-                        child: const Icon(CupertinoIcons.square_split_2x2,
-                            size: 18, color: Color(0xFF4F46E5)),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: <Widget>[
-                            const Text('逐题确认后保存',
-                                style: TextStyle(
-                                    fontSize: 14, fontWeight: FontWeight.w600)),
-                            const SizedBox(height: 2),
-                            Text(
-                              '保持当前分析结果页体验，保存前按题整理，方便后续检索、复习和继续练习。',
-                              style: TextStyle(
-                                  fontSize: 12,
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .onSurfaceVariant),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
+                  EditorialSectionHeader(
+                    title: '逐题确认后保存',
+                    icon: CupertinoIcons.square_split_2x2,
+                    iconColor: p.cobalt,
                   ),
-                  const SizedBox(height: 14),
+                  const SizedBox(height: 6),
+                  Text(
+                    '检测到多道题目，可勾选需要收进错题本的题目并逐题微调题干。',
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      height: 1.45,
+                      color: p.inkSecondary,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
                   Wrap(
                     spacing: 8,
                     runSpacing: 6,
                     children: <Widget>[
-                      _SummaryChip(
+                      EditorialPill(
                         label: '可保存 ${drafts.length} 题',
-                        bgColor: isDark
-                            ? const Color(0xFF4F46E5).withValues(alpha: 0.18)
-                            : const Color(0xFFEEF2FF),
-                        textColor: const Color(0xFF4F46E5),
+                        backgroundColor: p.cobaltTint,
+                        textColor: p.cobalt,
                       ),
-                      _SummaryChip(
+                      EditorialPill(
                         label: '已选 $selectedCount 题',
-                        bgColor: isDark
-                            ? const Color(0xFF16A34A).withValues(alpha: 0.16)
-                            : const Color(0xFFF0FDF4),
-                        textColor: const Color(0xFF16A34A),
+                        backgroundColor: p.emeraldTint,
+                        textColor: p.emerald,
                       ),
-                      _SummaryChip(
+                      EditorialPill(
                         label: source.subject.label,
-                        bgColor: isDark
-                            ? const Color(0xFFD97706).withValues(alpha: 0.16)
-                            : const Color(0xFFFFF7ED),
-                        textColor: const Color(0xFFD97706),
+                        backgroundColor: p.ochreTint,
+                        textColor: p.ochre,
                       ),
                       if (session.failedCandidateCount > 0)
-                        _SummaryChip(
+                        EditorialPill(
                           label: '${session.failedCandidateCount} 题未解析成功',
-                          bgColor: isDark
-                              ? const Color(0xFFDC2626).withValues(alpha: 0.16)
-                              : const Color(0xFFFEF2F2),
-                          textColor: const Color(0xFFB91C1C),
+                          backgroundColor: p.dangerTint,
+                          textColor: p.danger,
                         ),
                       if (session.retryingCandidateCount > 0)
-                        _SummaryChip(
+                        EditorialPill(
                           label: '${session.retryingCandidateCount} 题重新解析中',
-                          bgColor: isDark
-                              ? const Color(0xFFD97706).withValues(alpha: 0.16)
-                              : const Color(0xFFFFF7ED),
-                          textColor: const Color(0xFFB45309),
+                          backgroundColor: p.ochreTint,
+                          textColor: p.ochre,
                         ),
                     ],
                   ),
                 ],
               ),
             ),
-            const SizedBox(height: 16),
-            if (hasImage)
-              GestureDetector(
-                onTap: () => _showFullImage(context, source.imagePath),
-                child: Container(
-                  width: double.infinity,
-                  constraints: const BoxConstraints(maxHeight: 220),
-                  decoration: BoxDecoration(
-                    color:
-                        Theme.of(context).colorScheme.surfaceContainerHighest,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                        color: Theme.of(context).colorScheme.outlineVariant),
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: Image.file(
-                      File(source.imagePath),
-                      fit: BoxFit.contain,
-                    ),
-                  ),
-                ),
+            if (hasImage) ...<Widget>[
+              const SizedBox(height: 12),
+              EditorialPhotoPreview(
+                imagePath: source.imagePath,
+                maxHeight: 196,
               ),
-            if (hasImage) const SizedBox(height: 16),
-            Container(
+            ],
+            const SizedBox(height: 12),
+            EditorialCard(
               padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surface,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                    color: Theme.of(context).colorScheme.outlineVariant),
-              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  const Text('题目列表',
-                      style:
-                          TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                  const SizedBox(height: 6),
-                  Text('仅展示解析成功的题目。取消不需要保存的题目，点击卡片切换当前编辑项。',
-                      style: TextStyle(
-                          fontSize: 12,
-                          color:
-                              Theme.of(context).colorScheme.onSurfaceVariant)),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: <Widget>[
-                      TextButton.icon(
-                        onPressed:
-                            _isSaving ? null : () => _setAllSelected(true),
-                        icon: const Icon(CupertinoIcons.checkmark_circle,
-                            size: 16),
-                        label: const Text('全选'),
-                      ),
-                      const SizedBox(width: 8),
-                      TextButton.icon(
-                        onPressed:
-                            _isSaving ? null : () => _setAllSelected(false),
-                        icon: const Icon(CupertinoIcons.circle, size: 16),
-                        label: const Text('清空'),
-                      ),
-                    ],
+                  EditorialSectionHeader(
+                    title: '题目列表',
+                    icon: CupertinoIcons.list_bullet,
+                    iconColor: p.cobalt,
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        TextButton(
+                          onPressed:
+                              _isSaving ? null : () => _setAllSelected(true),
+                          style: TextButton.styleFrom(
+                            visualDensity: VisualDensity.compact,
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                          ),
+                          child: const Text('全选'),
+                        ),
+                        TextButton(
+                          onPressed:
+                              _isSaving ? null : () => _setAllSelected(false),
+                          style: TextButton.styleFrom(
+                            visualDensity: VisualDensity.compact,
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                          ),
+                          child: const Text('清空'),
+                        ),
+                      ],
+                    ),
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 4),
+                  Text(
+                    '仅展示解析成功的题目。取消不需要保存的题目，点击切换当前编辑项。',
+                    style: TextStyle(
+                      fontSize: 12,
+                      height: 1.45,
+                      color: p.inkSecondary,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
                   ...drafts.asMap().entries.map((entry) {
                     final index = entry.key;
                     final draft = entry.value;
@@ -228,109 +180,80 @@ class _QuestionSplitConfirmationScreenState
                       child: InkWell(
                         onTap: () => setState(() => _activeIndex = index),
                         borderRadius: BorderRadius.circular(12),
-                        child: Container(
-                          padding: const EdgeInsets.all(12),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 160),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 10),
                           decoration: BoxDecoration(
-                            color: isActive
-                                ? (isDark
-                                    ? const Color(0xFF6366F1)
-                                        .withValues(alpha: 0.18)
-                                    : const Color(0xFFEEF2FF))
-                                : colorScheme.surface,
+                            color: isActive ? p.cobaltTint : p.subtle,
                             borderRadius: BorderRadius.circular(12),
                             border: Border.all(
                               color: isActive
-                                  ? (isDark
-                                      ? const Color(0xFF6366F1)
-                                          .withValues(alpha: 0.45)
-                                      : const Color(0xFFC7D2FE))
-                                  : colorScheme.outlineVariant,
+                                  ? p.cobalt.withValues(alpha: 0.45)
+                                  : p.hairline,
                             ),
                           ),
                           child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                            crossAxisAlignment: CrossAxisAlignment.center,
                             children: <Widget>[
-                              Transform.scale(
-                                scale: 1.05,
-                                child: Checkbox(
-                                  value: draft.canSave && draft.selected,
-                                  onChanged: draft.canSave
-                                      ? (value) => _updateDraft(
-                                            index,
-                                            draft.copyWith(
-                                                selected: value ?? false),
-                                          )
-                                      : null,
-                                  shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(4)),
-                                ),
+                              Checkbox(
+                                value: draft.canSave && draft.selected,
+                                onChanged: draft.canSave
+                                    ? (value) => _updateDraft(
+                                          index,
+                                          draft.copyWith(
+                                              selected: value ?? false),
+                                        )
+                                    : null,
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(5)),
                               ),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: <Widget>[
-                                    Row(
-                                      children: <Widget>[
-                                        Container(
-                                          width: 24,
-                                          height: 24,
-                                          decoration: BoxDecoration(
-                                            color: isActive
-                                                ? const Color(0xFF6366F1)
-                                                : Theme.of(context)
-                                                    .colorScheme
-                                                    .surfaceContainerHighest,
-                                            borderRadius:
-                                                BorderRadius.circular(12),
-                                          ),
-                                          child: Center(
-                                            child: Text(
-                                              '${index + 1}',
-                                              style: TextStyle(
-                                                fontSize: 12,
-                                                fontWeight: FontWeight.w600,
-                                                color: isActive
-                                                    ? Colors.white
-                                                    : colorScheme
-                                                        .onSurfaceVariant,
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-                                        const SizedBox(width: 8),
-                                        Expanded(
-                                          child: MathContentView(
-                                            draft.text.trim().isEmpty
-                                                ? '待补充题目内容'
-                                                : draft.text,
-                                            contentFormat: _mathPreviewFormat,
-                                            mode: MathContentViewMode.compact,
-                                            maxLines: 1,
-                                            style: TextStyle(
-                                              fontSize: 13,
-                                              fontWeight: FontWeight.w500,
-                                              color: draft.canSave &&
-                                                      draft.selected
-                                                  ? Theme.of(context)
-                                                      .colorScheme
-                                                      .onSurface
-                                                  : Theme.of(context)
-                                                      .colorScheme
-                                                      .onSurfaceVariant,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
+                              Container(
+                                width: 24,
+                                height: 24,
+                                decoration: BoxDecoration(
+                                  color: isActive ? p.cobalt : p.card,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Center(
+                                  child: Text(
+                                    '${index + 1}',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w700,
+                                      color: isActive
+                                          ? (p.isDark
+                                              ? const Color(0xFF0B1526)
+                                              : Colors.white)
+                                          : p.inkSecondary,
                                     ),
-                                  ],
+                                  ),
                                 ),
                               ),
-                              const SizedBox(width: 8),
-                              Icon(CupertinoIcons.chevron_right,
-                                  size: 18,
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .outlineVariant),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: MathContentView(
+                                  draft.text.trim().isEmpty
+                                      ? '待补充题目内容'
+                                      : draft.text,
+                                  contentFormat: _mathPreviewFormat,
+                                  mode: MathContentViewMode.compact,
+                                  maxLines: 1,
+                                  style: TextStyle(
+                                    fontSize: 13.5,
+                                    fontWeight: FontWeight.w500,
+                                    color: draft.canSave && draft.selected
+                                        ? p.inkPrimary
+                                        : p.inkMuted,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Icon(
+                                CupertinoIcons.chevron_right,
+                                size: 15,
+                                color: isActive ? p.cobalt : p.inkMuted,
+                              ),
                             ],
                           ),
                         ),
@@ -340,63 +263,55 @@ class _QuestionSplitConfirmationScreenState
                 ],
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 12),
             if (activeDraft != null)
-              Container(
+              EditorialCard(
                 padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.surface,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                      color: Theme.of(context).colorScheme.outlineVariant),
-                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    Row(
-                      children: <Widget>[
-                        const Text('当前题目内容',
-                            style: TextStyle(
-                                fontSize: 14, fontWeight: FontWeight.w600)),
-                        const Spacer(),
-                        Text('第 ${activeDraft.originalOrder} 题',
-                            style: TextStyle(
-                                fontSize: 12,
-                                color: Theme.of(context)
-                                    .colorScheme
-                                    .onSurfaceVariant)),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Text('支持轻量修改，保存时会按当前内容逐题落库。',
+                    EditorialSectionHeader(
+                      title: '当前题目内容',
+                      icon: CupertinoIcons.pencil,
+                      iconColor: p.cobalt,
+                      trailing: Text(
+                        '第 ${activeDraft.originalOrder} 题',
                         style: TextStyle(
-                            fontSize: 12,
-                            color: Theme.of(context)
-                                .colorScheme
-                                .onSurfaceVariant)),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: p.inkMuted,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      '支持轻量修改，保存时会按当前内容逐题落库。',
+                      style: TextStyle(fontSize: 12, color: p.inkSecondary),
+                    ),
                     const SizedBox(height: 12),
                     TextFormField(
                       key: ValueKey(activeDraft.id),
                       initialValue: _displayEditableText(activeDraft.text),
                       maxLines: 8,
-                      minLines: 6,
+                      minLines: 5,
+                      style: TextStyle(
+                        fontSize: 14,
+                        height: 1.55,
+                        color: p.inkPrimary,
+                      ),
                       onChanged: (value) => _updateDraft(
                           safeIndex, activeDraft.copyWith(text: value)),
                       decoration: InputDecoration(
                         hintText: '请输入题目内容',
                         filled: true,
-                        fillColor: colorScheme.surface,
+                        fillColor: p.subtle,
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
-                          borderSide: BorderSide(
-                              color:
-                                  Theme.of(context).colorScheme.outlineVariant),
+                          borderSide: BorderSide(color: p.hairline),
                         ),
                         enabledBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
-                          borderSide: BorderSide(
-                              color:
-                                  Theme.of(context).colorScheme.outlineVariant),
+                          borderSide: BorderSide(color: p.hairline),
                         ),
                       ),
                     ),
@@ -410,39 +325,27 @@ class _QuestionSplitConfirmationScreenState
               ),
             if (_errorMessage != null) ...<Widget>[
               const SizedBox(height: 12),
-              Container(
+              EditorialCard(
+                accentColor: p.danger,
+                backgroundColor: p.dangerTint,
                 padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: isDark
-                      ? const Color(0xFFDC2626).withValues(alpha: 0.14)
-                      : const Color(0xFFFEF2F2),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                      color: isDark
-                          ? const Color(0xFFDC2626).withValues(alpha: 0.35)
-                          : const Color(0xFFFECACA)),
-                ),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    const Icon(CupertinoIcons.exclamationmark_triangle,
-                        size: 18, color: Color(0xFFDC2626)),
+                    Icon(CupertinoIcons.exclamationmark_triangle,
+                        size: 16, color: p.danger),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
                         _errorMessage!,
-                        style: TextStyle(
-                            fontSize: 12,
-                            color: isDark
-                                ? const Color(0xFFDC2626)
-                                : const Color(0xFFB91C1C)),
+                        style: TextStyle(fontSize: 12.5, color: p.danger),
                       ),
                     ),
                   ],
                 ),
               ),
             ],
-            const SizedBox(height: 24),
+            const SizedBox(height: 20),
             FilledButton.icon(
               onPressed: _isSaving ||
                       selectedCount == 0 ||
@@ -451,14 +354,18 @@ class _QuestionSplitConfirmationScreenState
                   : () => _saveQuestions(_draftsForSelected(session)),
               icon: _isSaving
                   ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
+                      width: 17,
+                      height: 17,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
                     )
                   : const Icon(CupertinoIcons.tray_arrow_down, size: 18),
               label: Text(_isSaving ? '正在保存...' : '保存已勾选题目 ($selectedCount)'),
               style: FilledButton.styleFrom(
-                  minimumSize: const Size(double.infinity, 50)),
+                minimumSize: const Size(double.infinity, 50),
+              ),
             ),
             const SizedBox(height: 8),
             Text(
@@ -470,16 +377,16 @@ class _QuestionSplitConfirmationScreenState
                           ? '将保存已勾选的 $selectedCount 道题；${session.failedCandidateCount} 道未解析成功的题不会写入错题本。'
                           : '将保存已勾选的 $selectedCount 道题；未勾选题目不会写入错题本。',
               textAlign: TextAlign.center,
-              style:
-                  TextStyle(fontSize: 12, color: colorScheme.onSurfaceVariant),
+              style: TextStyle(fontSize: 12, color: p.inkSecondary),
             ),
             const SizedBox(height: 12),
             OutlinedButton.icon(
               onPressed: () => context.go('/analysis/result'),
-              icon: const Icon(CupertinoIcons.chevron_left, size: 18),
+              icon: const Icon(CupertinoIcons.chevron_left, size: 17),
               label: const Text('返回结果页'),
               style: OutlinedButton.styleFrom(
-                  minimumSize: const Size(double.infinity, 48)),
+                minimumSize: const Size(double.infinity, 48),
+              ),
             ),
           ],
         ),
@@ -627,26 +534,6 @@ class _QuestionSplitConfirmationScreenState
       ),
     );
   }
-
-  void _showFullImage(BuildContext context, String imagePath) {
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => Scaffold(
-          backgroundColor: Colors.black,
-          appBar: AppBar(
-            backgroundColor: Colors.transparent,
-            foregroundColor: Colors.white,
-            title: const Text('原图'),
-          ),
-          body: Center(
-            child: InteractiveViewer(
-              child: Image.file(File(imagePath)),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 }
 
 class _FormulaPreviewCard extends StatelessWidget {
@@ -657,14 +544,15 @@ class _FormulaPreviewCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = EditorialPalette.of(context);
     final trimmed = content.trim();
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+        color: p.subtle,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: p.hairline),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -672,51 +560,23 @@ class _FormulaPreviewCard extends StatelessWidget {
           Text(
             '公式预览',
             style: TextStyle(
-              fontSize: 12,
+              fontSize: 11.5,
               fontWeight: FontWeight.w600,
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
+              color: p.inkMuted,
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
           trimmed.isEmpty
-              ? Text('暂无可预览内容',
-                  style: TextStyle(
-                      fontSize: 13,
-                      color: Theme.of(context).colorScheme.onSurfaceVariant))
+              ? Text(
+                  '暂无可预览内容',
+                  style: TextStyle(fontSize: 13, color: p.inkMuted),
+                )
               : MathContentView(
                   trimmed,
                   contentFormat: contentFormat,
-                  style: const TextStyle(fontSize: 14),
+                  style: TextStyle(fontSize: 14, color: p.inkPrimary),
                 ),
         ],
-      ),
-    );
-  }
-}
-
-class _SummaryChip extends StatelessWidget {
-  const _SummaryChip({
-    required this.label,
-    required this.bgColor,
-    required this.textColor,
-  });
-
-  final String label;
-  final Color bgColor;
-  final Color textColor;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-        color: bgColor,
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-            fontSize: 12, color: textColor, fontWeight: FontWeight.w500),
       ),
     );
   }

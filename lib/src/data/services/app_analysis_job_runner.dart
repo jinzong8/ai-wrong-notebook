@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:smart_wrong_notebook/src/data/remote/ai/ai_analysis_service.dart';
 import 'package:smart_wrong_notebook/src/data/repositories/question_repository.dart';
 import 'package:smart_wrong_notebook/src/data/services/question_analysis_pipeline.dart';
+import 'package:smart_wrong_notebook/src/data/services/single_question_auto_save.dart';
 import 'package:smart_wrong_notebook/src/domain/models/generated_exercise.dart';
 import 'package:smart_wrong_notebook/src/domain/models/ai_task_spec.dart';
 import 'package:smart_wrong_notebook/src/domain/models/analysis_job.dart';
@@ -135,6 +136,14 @@ class AppAnalysisJobRunner implements AnalysisJobRunner {
       totalUnits: candidateProgress?.totalUnits ?? 0,
       failedUnits: candidateProgress?.failedUnits ?? 0,
     ));
+    if (!isMultiQuestionAnalysisResult(updated) &&
+        _questionRepository != null) {
+      final saved = await autoSaveSingleQuestion(
+        analyzed: updated,
+        repository: _questionRepository,
+      );
+      return jsonEncode(saved.toJson());
+    }
     return jsonEncode(updated.toJson());
   }
 

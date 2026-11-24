@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:smart_wrong_notebook/src/app/providers.dart';
+import 'package:smart_wrong_notebook/src/data/services/single_question_auto_save.dart';
 import 'package:smart_wrong_notebook/src/domain/models/generated_exercise.dart';
 import 'package:smart_wrong_notebook/src/domain/models/question_record.dart';
 import 'package:smart_wrong_notebook/src/domain/services/exercise_round_service.dart';
@@ -874,6 +875,24 @@ class _ExercisePracticeState extends ConsumerState<ExercisePracticeScreen> {
       ref.read(currentPracticeContextProvider.notifier).state = null;
       if (!mounted) return;
       context.go('/notebook/question/${question.id}');
+      return;
+    }
+
+    if (!isMultiQuestionAnalysisResult(question)) {
+      final saved = await autoSaveSingleQuestion(
+        analyzed: question,
+        repository: ref.read(questionRepositoryProvider),
+      );
+      try {
+        await ref
+            .read(scanTaskLifecycleServiceProvider)
+            .completeSaved(saved.id);
+      } catch (_) {}
+      invalidateQuestionList(ref);
+      ref.invalidate(scanTaskCountProvider);
+      ref.read(currentQuestionProvider.notifier).state = saved;
+      if (!mounted) return;
+      context.go('/notebook/question/${saved.id}');
       return;
     }
 

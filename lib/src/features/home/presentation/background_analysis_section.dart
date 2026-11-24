@@ -1,5 +1,6 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:smart_wrong_notebook/src/common/widgets/editorial_surface.dart';
 import 'package:smart_wrong_notebook/src/data/services/question_analysis_coordinator.dart';
 import 'package:smart_wrong_notebook/src/domain/models/analysis_job.dart';
 import 'package:smart_wrong_notebook/src/domain/models/question_record.dart';
@@ -23,14 +24,23 @@ class BackgroundAnalysisSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (tasks.isEmpty) return const SizedBox.shrink();
+    final p = EditorialPalette.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
         Row(
           children: <Widget>[
-            const Icon(CupertinoIcons.doc_text_search, size: 18),
+            Icon(CupertinoIcons.doc_text_search, size: 17, color: p.cobalt),
             const SizedBox(width: 8),
-            Text('录题进度', style: Theme.of(context).textTheme.titleMedium),
+            Text(
+              '录题进度',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const Spacer(),
+            Text(
+              '${tasks.length} 项',
+              style: TextStyle(fontSize: 12, color: p.inkMuted),
+            ),
           ],
         ),
         const SizedBox(height: 10),
@@ -60,7 +70,7 @@ class _TaskTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
+    final p = EditorialPalette.of(context);
     final status = task.job.status;
     final canOpen =
         status == AnalysisJobStatus.completed && task.resultQuestion != null;
@@ -79,76 +89,91 @@ class _TaskTile extends StatelessWidget {
         ? '$subjectLabel · 共 ${task.questionCount} 道题'
         : subjectLabel;
 
+    final accentColor = switch (status) {
+      AnalysisJobStatus.failed => p.danger,
+      AnalysisJobStatus.completed =>
+        _hasPartialFailures ? p.ochre : p.emerald,
+      _ => p.cobalt,
+    };
+
     return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Material(
-        color: colorScheme.surface,
-        clipBehavior: Clip.antiAlias,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(8),
-          side: BorderSide(color: colorScheme.outlineVariant),
-        ),
-        child: ListTile(
-          minTileHeight: 92,
-          contentPadding:
-              const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          leading: _StatusIcon(task: task),
-          title: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Text(
-                subjectLine,
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: task.displaySubject.color,
-                ),
-              ),
-              const SizedBox(height: 4),
-              MathContentView(
-                task.displayQuestionText,
-                contentFormat: task.resultQuestion?.contentFormat ??
-                    task.sourceQuestion.contentFormat,
-                mode: MathContentViewMode.compact,
-                maxLines: 2,
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ],
-          ),
-          subtitle: Padding(
-            padding: const EdgeInsets.only(top: 6),
-            child: Column(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: EditorialCard(
+        accentColor: accentColor,
+        borderRadius: 14,
+        padding: EdgeInsets.zero,
+        child: Material(
+          color: Colors.transparent,
+          child: ListTile(
+            minTileHeight: 84,
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            leading: _StatusIcon(task: task),
+            title: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
                 Text(
-                  _statusLabel(),
+                  subjectLine,
                   style: TextStyle(
                     fontSize: 12,
-                    color: _statusColor(colorScheme),
+                    fontWeight: FontWeight.w600,
+                    color: task.displaySubject == Subject.unknown
+                        ? p.inkSecondary
+                        : task.displaySubject.color,
                   ),
                 ),
-                if (showUnitProgress) ...<Widget>[
-                  const SizedBox(height: 6),
-                  LinearProgressIndicator(
-                    value: progress!.fraction,
-                    minHeight: 4,
-                    borderRadius: BorderRadius.circular(2),
+                const SizedBox(height: 4),
+                MathContentView(
+                  task.displayQuestionText,
+                  contentFormat: task.resultQuestion?.contentFormat ??
+                      task.sourceQuestion.contentFormat,
+                  mode: MathContentViewMode.compact,
+                  maxLines: 2,
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w500,
+                    color: p.inkPrimary,
                   ),
-                ],
+                ),
               ],
             ),
+            subtitle: Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    _statusLabel(),
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                      color: _statusColor(p),
+                    ),
+                  ),
+                  if (showUnitProgress) ...<Widget>[
+                    const SizedBox(height: 6),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(999),
+                      child: LinearProgressIndicator(
+                        value: progress!.fraction,
+                        minHeight: 4,
+                        backgroundColor: p.subtle,
+                        color: p.cobalt,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            trailing: _TaskActions(
+              task: task,
+              canOpen: canOpen,
+              onOpenResult: onOpenResult,
+              onRetry: onRetry,
+              onDelete: onDelete,
+            ),
+            onTap: canOpen ? () => onOpenResult(task) : null,
           ),
-          trailing: _TaskActions(
-            task: task,
-            canOpen: canOpen,
-            onOpenResult: onOpenResult,
-            onRetry: onRetry,
-            onDelete: onDelete,
-          ),
-          onTap: canOpen ? () => onOpenResult(task) : null,
         ),
       ),
     );
@@ -182,12 +207,16 @@ class _TaskTile extends StatelessWidget {
         if (candidateSummary.failed > 0) {
           return '已解析 ${candidateSummary.successful}/${candidateSummary.total}，${candidateSummary.failed} 道未成功，待确认';
         }
+        return '多题解析完成，待拆分保存';
       }
       final progress = task.job.progress;
       if (progress != null &&
           progress.totalUnits > 1 &&
           progress.failedUnits > 0) {
         return '已解析 ${progress.totalUnits - progress.failedUnits}/${progress.totalUnits}，${progress.failedUnits} 道未成功，待确认';
+      }
+      if (task.questionCount > 1) {
+        return '多题解析完成，待拆分保存';
       }
     }
     return switch (status) {
@@ -239,13 +268,13 @@ class _TaskTile extends StatelessWidget {
     );
   }
 
-  Color _statusColor(ColorScheme colorScheme) {
+  Color _statusColor(EditorialPalette p) {
     final isRetrying = _candidateSummary?.retryingCandidate != null;
-    if (_hasPartialFailures || isRetrying) return const Color(0xFFB45309);
+    if (_hasPartialFailures || isRetrying) return p.ochre;
     return switch (task.job.status) {
-      AnalysisJobStatus.completed => const Color(0xFF15803D),
-      AnalysisJobStatus.failed => colorScheme.error,
-      _ => colorScheme.onSurfaceVariant,
+      AnalysisJobStatus.completed => p.emerald,
+      AnalysisJobStatus.failed => p.danger,
+      _ => p.inkSecondary,
     };
   }
 }
@@ -288,12 +317,12 @@ class _TaskActions extends StatelessWidget {
         IconButton(
           onPressed: () => onDelete(task),
           tooltip: failed ? '删除失败任务' : '删除任务',
-          icon: const Icon(CupertinoIcons.delete, size: 18),
+          icon: const Icon(CupertinoIcons.delete, size: 17),
         ),
         if (failed)
           TextButton.icon(
             onPressed: () => onRetry(task),
-            icon: const Icon(CupertinoIcons.refresh, size: 16),
+            icon: const Icon(CupertinoIcons.refresh, size: 15),
             label: const Text('重试'),
           )
         else if (canOpen)
@@ -313,51 +342,48 @@ class _StatusIcon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = EditorialPalette.of(context);
     final status = task.job.status;
     if (status == AnalysisJobStatus.running || task.isRecognizing) {
-      return const SizedBox.square(
+      return SizedBox.square(
         dimension: 28,
         child: Padding(
-          padding: EdgeInsets.all(4),
-          child: CircularProgressIndicator(strokeWidth: 2.5),
+          padding: const EdgeInsets.all(4),
+          child: CircularProgressIndicator(
+            strokeWidth: 2.5,
+            color: p.cobalt,
+          ),
         ),
       );
     }
-    final colorScheme = Theme.of(context).colorScheme;
     final progress = task.job.progress;
     final hasPartialFailures = status == AnalysisJobStatus.completed &&
         progress != null &&
         progress.totalUnits > 1 &&
         progress.failedUnits > 0;
     if (hasPartialFailures) {
-      return const Icon(
+      return Icon(
         CupertinoIcons.exclamationmark_circle_fill,
-        size: 28,
-        color: Color(0xFFB45309),
+        size: 26,
+        color: p.ochre,
       );
     }
     final (icon, color) = switch (status) {
-      AnalysisJobStatus.queued => (
-          CupertinoIcons.clock,
-          colorScheme.onSurfaceVariant
-        ),
+      AnalysisJobStatus.queued => (CupertinoIcons.clock, p.inkMuted),
       AnalysisJobStatus.completed => (
           CupertinoIcons.check_mark_circled_solid,
-          const Color(0xFF15803D)
+          p.emerald
         ),
       AnalysisJobStatus.failed => (
           CupertinoIcons.exclamationmark_circle_fill,
-          colorScheme.error
+          p.danger
         ),
       AnalysisJobStatus.cancelled => (
           CupertinoIcons.clear_circled,
-          colorScheme.onSurfaceVariant
+          p.inkMuted
         ),
-      AnalysisJobStatus.running => (
-          CupertinoIcons.clock,
-          colorScheme.onSurfaceVariant
-        ),
+      AnalysisJobStatus.running => (CupertinoIcons.clock, p.inkMuted),
     };
-    return Icon(icon, size: 28, color: color);
+    return Icon(icon, size: 26, color: color);
   }
 }

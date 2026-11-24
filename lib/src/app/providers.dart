@@ -358,7 +358,26 @@ QuestionRecord buildSplitQuestionRecord({
 
 // --- Internal version counter for cache invalidation ---
 
-final StateProvider<int> _listVersionProvider = StateProvider<int>((ref) => 0);
+/// Incremented whenever background jobs auto-save a single question directly
+/// into [QuestionRepository] so Home/Notebook/Review refresh automatically
+/// without putting FutureProviders through an extra AsyncLoading tick.
+final Provider<ValueNotifier<int>> backgroundQuestionVersionNotifierProvider =
+    Provider<ValueNotifier<int>>((ref) {
+  final notifier = ValueNotifier<int>(0);
+  ref.onDispose(notifier.dispose);
+  return notifier;
+});
+
+final StateProvider<int> _listVersionProvider = StateProvider<int>((ref) {
+  final notifier = ref.watch(backgroundQuestionVersionNotifierProvider);
+  void onBackgroundSave() {
+    ref.controller.state++;
+  }
+
+  notifier.addListener(onBackgroundSave);
+  ref.onDispose(() => notifier.removeListener(onBackgroundSave));
+  return 0;
+});
 
 /// Call after any mutation (save, delete, review) to refresh list/review providers.
 void invalidateQuestionList(WidgetRef ref) {

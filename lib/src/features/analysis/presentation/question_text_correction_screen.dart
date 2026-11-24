@@ -5,10 +5,19 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:smart_wrong_notebook/src/app/providers.dart';
+import 'package:smart_wrong_notebook/src/common/widgets/editorial_surface.dart';
 import 'package:smart_wrong_notebook/src/domain/models/question_record.dart';
 
 class QuestionTextCorrectionScreen extends ConsumerStatefulWidget {
-  const QuestionTextCorrectionScreen({super.key});
+  const QuestionTextCorrectionScreen({
+    super.key,
+    this.returnToDetail = false,
+  });
+
+  /// When `true`, the screen was opened from an already-saved
+  /// `QuestionDetailScreen`, so navigating back returns to that detail view
+  /// and submitting re-analyzes and updates the saved question in place.
+  final bool returnToDetail;
 
   @override
   ConsumerState<QuestionTextCorrectionScreen> createState() =>
@@ -35,11 +44,21 @@ class _QuestionTextCorrectionScreenState
     super.dispose();
   }
 
+  void _navigateBack(QuestionRecord record) {
+    if (widget.returnToDetail) {
+      context.go('/notebook/question/${record.id}');
+    } else {
+      context.go('/analysis/result');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final p = EditorialPalette.of(context);
     final record = ref.watch(currentQuestionProvider);
     if (record == null) {
       return Scaffold(
+        backgroundColor: p.canvas,
         appBar: AppBar(title: const Text('核对题干')),
         body: const Center(child: Text('未找到本次解析结果')),
       );
@@ -47,11 +66,12 @@ class _QuestionTextCorrectionScreenState
 
     final note = record.analysisResult?.consistencyNote.trim() ?? '';
     return Scaffold(
+      backgroundColor: p.canvas,
       appBar: AppBar(
         title: const Text('核对题干'),
         leading: IconButton(
           icon: const Icon(CupertinoIcons.chevron_left),
-          onPressed: _submitting ? null : () => context.go('/analysis/result'),
+          onPressed: _submitting ? null : () => _navigateBack(record),
         ),
       ),
       body: SafeArea(
@@ -59,64 +79,111 @@ class _QuestionTextCorrectionScreenState
           children: <Widget>[
             Expanded(
               child: ListView(
-                padding: const EdgeInsets.all(24),
+                padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
                 children: <Widget>[
-                  if (File(record.imagePath).existsSync()) ...<Widget>[
-                    GestureDetector(
-                      onTap: () => _showFullImage(context, record.imagePath),
-                      child: Container(
-                        height: 140,
-                        decoration: BoxDecoration(
-                          color: Theme.of(context)
-                              .colorScheme
-                              .surfaceContainerHighest,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(8),
-                          child: Image.file(
-                            File(record.imagePath),
-                            width: double.infinity,
-                            fit: BoxFit.contain,
-                          ),
-                        ),
-                      ),
+                  if (record.imagePath.isNotEmpty &&
+                      File(record.imagePath).existsSync()) ...<Widget>[
+                    EditorialPhotoPreview(
+                      imagePath: record.imagePath,
+                      maxHeight: 156,
                     ),
-                    const SizedBox(height: 20),
+                    const SizedBox(height: 16),
                   ],
                   if (note.isNotEmpty) ...<Widget>[
-                    Text(
-                      note,
-                      style: TextStyle(
-                        fontSize: 13,
-                        height: 1.45,
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    EditorialCard(
+                      accentColor: p.terracotta,
+                      backgroundColor: p.terracottaTint,
+                      padding: const EdgeInsets.all(14),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Icon(
+                            CupertinoIcons.exclamationmark_triangle,
+                            size: 16,
+                            color: p.terracotta,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              note,
+                              style: TextStyle(
+                                fontSize: 13,
+                                height: 1.5,
+                                color: p.inkPrimary,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                     const SizedBox(height: 16),
                   ],
-                  TextField(
-                    controller: _textController,
-                    minLines: 9,
-                    maxLines: 16,
-                    autofocus: true,
-                    enabled: !_submitting,
-                    onChanged: (_) {
-                      if (_errorText != null) {
-                        setState(() => _errorText = null);
-                      }
-                    },
-                    decoration: InputDecoration(
-                      labelText: '题干',
-                      alignLabelWithHint: true,
-                      errorText: _errorText,
+                  EditorialCard(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        EditorialSectionHeader(
+                          title: '修正题干与条件',
+                          icon: CupertinoIcons.pencil,
+                          iconColor: p.cobalt,
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          widget.returnToDetail
+                              ? '修改识别有误的数字、符号或条件后，AI 将重新解析并原地更新这道错题。'
+                              : '补充或修正识别有误的题干内容后，AI 将按新题干重新解析。',
+                          style: TextStyle(
+                            fontSize: 12.5,
+                            height: 1.45,
+                            color: p.inkSecondary,
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        TextField(
+                          controller: _textController,
+                          minLines: 8,
+                          maxLines: 16,
+                          autofocus: true,
+                          enabled: !_submitting,
+                          style: TextStyle(
+                            fontSize: 14.5,
+                            height: 1.6,
+                            color: p.inkPrimary,
+                          ),
+                          onChanged: (_) {
+                            if (_errorText != null) {
+                              setState(() => _errorText = null);
+                            }
+                          },
+                          decoration: InputDecoration(
+                            labelText: '题干',
+                            alignLabelWithHint: true,
+                            errorText: _errorText,
+                            filled: true,
+                            fillColor: p.subtle,
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide(color: p.hairline),
+                            ),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide(color: p.hairline),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ],
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
+            Container(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+              decoration: BoxDecoration(
+                color: p.canvas,
+                border: Border(top: BorderSide(color: p.hairline)),
+              ),
               child: SizedBox(
                 width: double.infinity,
                 child: FilledButton.icon(
@@ -124,9 +191,12 @@ class _QuestionTextCorrectionScreenState
                   icon: _submitting
                       ? const SizedBox.square(
                           dimension: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
                         )
-                      : const Icon(CupertinoIcons.arrow_clockwise, size: 18),
+                      : const Icon(CupertinoIcons.arrow_clockwise, size: 17),
                   label: const Text('重新解析'),
                 ),
               ),
@@ -148,7 +218,6 @@ class _QuestionTextCorrectionScreenState
       return;
     }
 
-    // Settle the focused text field before replacing this route.
     FocusManager.instance.primaryFocus?.unfocus();
     setState(() => _submitting = true);
     try {
@@ -158,12 +227,13 @@ class _QuestionTextCorrectionScreenState
           record.createReanalysisDraft(correctedText: correctedText);
       if (!mounted) return;
 
-      // The provider update rebuilds this page. Deferring route replacement to
-      // the next frame prevents its focused TextField from being disposed in
-      // the same build scope.
       await WidgetsBinding.instance.endOfFrame;
       if (!mounted) return;
-      context.go('/analysis/loading');
+      context.go(
+        widget.returnToDetail
+            ? '/analysis/loading?reanalysis=1'
+            : '/analysis/loading',
+      );
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -171,23 +241,5 @@ class _QuestionTextCorrectionScreenState
         _errorText = '无法创建重新解析任务：$error';
       });
     }
-  }
-
-  void _showFullImage(BuildContext context, String imagePath) {
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => Scaffold(
-          backgroundColor: Colors.black,
-          appBar: AppBar(
-            backgroundColor: Colors.transparent,
-            foregroundColor: Colors.white,
-            title: const Text('原图'),
-          ),
-          body: Center(
-            child: InteractiveViewer(child: Image.file(File(imagePath))),
-          ),
-        ),
-      ),
-    );
   }
 }
