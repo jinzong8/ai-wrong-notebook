@@ -5,7 +5,8 @@
 > 非常感谢原作者做出这么实用、架构扎实的开源错题本应用！本分支在原项目基础上结合日常使用场景持续打磨与优化，目的是**让我自家孩子用起来更顺手、更高效**。  
 > 下方完整保留原作者的原版说明与赞赏渠道，如项目帮到了你，欢迎前往原仓库点 Star 并支持原作者。
 >
-> **本分支安装包下载**：[Releases · jinzong8/ai-wrong-notebook](https://github.com/jinzong8/ai-wrong-notebook/releases)
+> **本分支安装包下载**：[Releases · jinzong8/ai-wrong-notebook](https://github.com/jinzong8/ai-wrong-notebook/releases)  
+> **当前自用模型**：`gpt6.1-terra`（基于 OpenAI 新版接口协议实测稳定可用）
 
 ## 本分支更新日志
 
@@ -25,6 +26,8 @@
 - **照片角度拉直**：补回照片旋转/角度微调能力，歪拍题目也能快速拉正裁剪。
 
 ### v1.0.6
+- **支持 OpenAI 新模型与新版协议**：新增对 OpenAI Responses API 及新版 Chat Completions 格式的兼容支持，可顺利对接最新一代多模态 / 推理模型（如目前自用的 `gpt6.1-terra`）。
+- **应用内拍照与即时框选**：新增应用内一体拍照框选页面，缩短拍题操作链路。
 - **自动化发布流程与固定签名**：接入 GitHub Actions 自动构建正式版 APK/AAB，并配置持久化签名密钥，后续版本可直接覆盖安装、不丢失本地错题数据。
 
 ---
