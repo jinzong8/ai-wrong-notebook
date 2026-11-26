@@ -31,6 +31,7 @@ import 'package:smart_wrong_notebook/src/domain/models/subject.dart';
 import 'package:smart_wrong_notebook/src/features/capture/application/camera_capture_session.dart';
 import 'package:smart_wrong_notebook/src/features/update/data/app_update_service.dart';
 import 'package:smart_wrong_notebook/src/features/update/domain/app_update_models.dart';
+import 'package:smart_wrong_notebook/src/shared/utils/local_date_utils.dart';
 
 // --- Repository providers (default implementations) ---
 
@@ -232,6 +233,36 @@ final StateProvider<String> questionDetailReturnRouteProvider =
 final StateProvider<String> captureReturnRouteProvider =
     StateProvider<String>((ref) => '/');
 
+/// Context when opening `CameraCaptureCropScreen` to retake/replace an
+/// existing question's photo instead of creating a brand-new record.
+class RetakeCaptureTarget {
+  const RetakeCaptureTarget({
+    required this.returnRoute,
+    this.replaceQuestionId,
+    this.subject,
+    this.discardScanTaskQuestion,
+  });
+
+  /// Route to return to if the user cancels retaking before submitting.
+  final String returnRoute;
+
+  /// Non-null when replacing an already-saved notebook question in place.
+  final String? replaceQuestionId;
+
+  /// Optional subject hint preserved across retake.
+  final Subject? subject;
+
+  /// Non-null when retaking from an unsaved analysis result whose old scan
+  /// task should be discarded once the new capture is submitted.
+  final QuestionRecord? discardScanTaskQuestion;
+
+  bool get isInPlaceReplace =>
+      replaceQuestionId != null && replaceQuestionId!.isNotEmpty;
+}
+
+final StateProvider<RetakeCaptureTarget?> retakeCaptureTargetProvider =
+    StateProvider<RetakeCaptureTarget?>((ref) => null);
+
 enum PracticeContextSource { analysis, notebook }
 
 class PracticeContext {
@@ -362,7 +393,7 @@ QuestionRecord buildSplitQuestionRecord({
     normalizedQuestionText: trimmedText,
     contentFormat: draft.contentFormat ?? source.contentFormat,
     tags: source.tags,
-    createdAt: now,
+    createdAt: source.createdAt,
     updatedAt: now,
     lastReviewedAt: null,
     reviewCount: 0,
@@ -413,13 +444,15 @@ void invalidateQuestionList(WidgetRef ref) {
 final FutureProvider<List<QuestionRecord>> questionListProvider =
     FutureProvider<List<QuestionRecord>>((ref) async {
   ref.watch(_listVersionProvider);
-  return ref.read(questionRepositoryProvider).listAll();
+  final all = await ref.read(questionRepositoryProvider).listAll();
+  return [...all]..sort((a, b) => b.createdAt.compareTo(a.createdAt));
 });
 
 final FutureProvider<List<ReviewLog>> reviewLogListProvider =
     FutureProvider<List<ReviewLog>>((ref) async {
   ref.watch(_listVersionProvider);
-  return ref.read(reviewLogRepositoryProvider).listAll();
+  final logs = await ref.read(reviewLogRepositoryProvider).listAll();
+  return [...logs]..sort((a, b) => b.reviewedAt.compareTo(a.reviewedAt));
 });
 
 class QuestionBatchGroup {
@@ -478,20 +511,87 @@ int _compareBatchQuestions(QuestionRecord a, QuestionRecord b) {
   return a.id.compareTo(b.id);
 }
 
-// --- Questions due for review ---
+// --- Questions due for review & Continuous Review Session ---
+
+/// Orders pending review questions so unreviewed items appear first (newest
+/// capture first), followed by previously reviewed items ordered from oldest
+/// `lastReviewedAt` to most recent (so tapping "仍需复习" rotates the question
+/// to the end of the queue instead of keeping it stuck at the top).
+List<QuestionRecord> sortDueReviewQuestions(Iterable<QuestionRecord> items) {
+  final list = items.toList();
+  list.sort((a, b) {
+    final aRev = a.lastReviewedAt;
+    final bRev = b.lastReviewedAt;
+    if (aRev == null && bRev != null) return -1;
+    if (aRev != null && bRev == null) return 1;
+    if (aRev != null && bRev != null) {
+      final cmp = aRev.compareTo(bRev);
+      if (cmp != 0) return cmp;
+    }
+    return b.createdAt.compareTo(a.createdAt);
+  });
+  return list;
+}
 
 final FutureProvider<List<QuestionRecord>> dueReviewProvider =
     FutureProvider<List<QuestionRecord>>((ref) async {
   ref.watch(_listVersionProvider);
   final all = await ref.read(questionRepositoryProvider).listAll();
-  return all
-      .where((QuestionRecord q) =>
+  return sortDueReviewQuestions(
+    all.where(
+      (QuestionRecord q) =>
           q.contentStatus == ContentStatus.ready &&
-          q.masteryLevel != MasteryLevel.mastered)
-      .toList();
+          q.masteryLevel != MasteryLevel.mastered,
+    ),
+  );
 });
 
-// --- Notebook filter state ---
+/// Tracks an active continuous review session (连续刷题模式) across questions.
+class ReviewSessionState {
+  const ReviewSessionState({
+    required this.queueIds,
+    required this.currentIndex,
+    this.masteredCount = 0,
+    this.keepReviewingCount = 0,
+  });
+
+  final List<String> queueIds;
+  final int currentIndex;
+  final int masteredCount;
+  final int keepReviewingCount;
+
+  int get totalCount => queueIds.length;
+  int get completedCount => masteredCount + keepReviewingCount;
+  bool get hasNext => currentIndex + 1 < queueIds.length;
+  String? get currentQuestionId =>
+      (currentIndex >= 0 && currentIndex < queueIds.length)
+          ? queueIds[currentIndex]
+          : null;
+  String? get nextQuestionId => hasNext ? queueIds[currentIndex + 1] : null;
+
+  ReviewSessionState advance({required bool mastered}) {
+    return ReviewSessionState(
+      queueIds: queueIds,
+      currentIndex: currentIndex + 1,
+      masteredCount: mastered ? masteredCount + 1 : masteredCount,
+      keepReviewingCount: mastered ? keepReviewingCount : keepReviewingCount + 1,
+    );
+  }
+}
+
+final StateProvider<ReviewSessionState?> activeReviewSessionProvider =
+    StateProvider<ReviewSessionState?>((ref) => null);
+
+// --- Notebook sort & filter state ---
+
+enum NotebookSortOrder {
+  newestFirst,
+  oldestFirst,
+  mostReviewed,
+}
+
+final StateProvider<NotebookSortOrder> selectedNotebookSortProvider =
+    StateProvider<NotebookSortOrder>((ref) => NotebookSortOrder.newestFirst);
 
 final StateProvider<Subject?> selectedSubjectFilterProvider =
     StateProvider<Subject?>((ref) => null);
@@ -519,11 +619,8 @@ final FutureProvider<List<String>> allTagsProvider =
   final all = await ref.read(questionRepositoryProvider).listAll();
   final tags = <String>{};
   for (final q in all) {
-    // 添加 AI 短标签
     tags.addAll(q.aiTags);
-    // 添加 AI 知识点
     tags.addAll(q.aiKnowledgePoints);
-    // 添加自定义标签
     tags.addAll(q.customTags);
   }
   return tags.toList()..sort();
@@ -539,38 +636,58 @@ final FutureProvider<List<QuestionRecord>> filteredQuestionListProvider =
   final subject = ref.watch(selectedSubjectFilterProvider);
   final mastery = ref.watch(selectedMasteryFilterProvider);
   final createdToday = ref.watch(selectedCreatedTodayFilterProvider);
-  final query = ref.watch(searchQueryProvider).toLowerCase();
+  final query = ref.watch(searchQueryProvider).trim().toLowerCase();
   final knowledgePoint = ref.watch(selectedKnowledgePointFilterProvider);
   final selectedTags = ref.watch(selectedTagsFilterProvider);
+  final sortOrder = ref.watch(selectedNotebookSortProvider);
 
   final now = DateTime.now();
-  return all.where((QuestionRecord q) {
+  final filtered = all.where((QuestionRecord q) {
     if (subject != null && q.subject != subject) return false;
     if (mastery != null && q.masteryLevel != mastery) return false;
-    if (createdToday &&
-        (q.createdAt.year != now.year ||
-            q.createdAt.month != now.month ||
-            q.createdAt.day != now.day)) {
+    if (createdToday && !isSameLocalCalendarDay(q.createdAt, now)) {
       return false;
     }
-    if (query.isNotEmpty &&
-        !q.normalizedQuestionText.toLowerCase().contains(query)) {
-      return false;
+    if (query.isNotEmpty) {
+      final inStem = q.normalizedQuestionText.toLowerCase().contains(query);
+      final inTags = [...q.aiTags, ...q.aiKnowledgePoints, ...q.customTags]
+          .any((t) => t.toLowerCase().contains(query));
+      if (!inStem && !inTags) return false;
     }
-    // AI 知识点过滤：匹配任意一个知识点
+    // 单选标签 / 知识点过滤：统一匹配 AI 标签、知识点与自定义标签
     if (knowledgePoint != null && knowledgePoint.isNotEmpty) {
-      final kps = q.aiKnowledgePoints;
-      if (!kps.any((kp) => kp.contains(knowledgePoint))) return false;
+      final needle = knowledgePoint.toLowerCase();
+      final pool = [...q.aiTags, ...q.aiKnowledgePoints, ...q.customTags];
+      if (!pool.any((item) => item.toLowerCase().contains(needle))) {
+        return false;
+      }
     }
     // 多选标签过滤：必须包含所有选中的标签
     if (selectedTags.isNotEmpty) {
-      final allQTags = [...q.aiKnowledgePoints, ...q.customTags];
+      final allQTags = [...q.aiTags, ...q.aiKnowledgePoints, ...q.customTags];
       for (final tag in selectedTags) {
-        if (!allQTags.any((t) => t.contains(tag))) return false;
+        final needle = tag.toLowerCase();
+        if (!allQTags.any((t) => t.toLowerCase().contains(needle))) {
+          return false;
+        }
       }
     }
     return true;
   }).toList();
+
+  filtered.sort((a, b) {
+    switch (sortOrder) {
+      case NotebookSortOrder.newestFirst:
+        return b.createdAt.compareTo(a.createdAt);
+      case NotebookSortOrder.oldestFirst:
+        return a.createdAt.compareTo(b.createdAt);
+      case NotebookSortOrder.mostReviewed:
+        final cmp = b.reviewCount.compareTo(a.reviewCount);
+        if (cmp != 0) return cmp;
+        return b.createdAt.compareTo(a.createdAt);
+    }
+  });
+  return filtered;
 });
 
 // --- Theme mode ---

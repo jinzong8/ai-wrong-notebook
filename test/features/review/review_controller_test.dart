@@ -8,9 +8,14 @@ import 'package:smart_wrong_notebook/src/domain/models/subject.dart';
 import 'package:smart_wrong_notebook/src/domain/repositories/review_log_repository.dart';
 import 'package:smart_wrong_notebook/src/features/review/presentation/review_controller.dart';
 
-QuestionRecord _makeQuestion(String id,
-    {MasteryLevel mastery = MasteryLevel.newQuestion, int reviewCount = 0}) {
-  final now = DateTime.now();
+QuestionRecord _makeQuestion(
+  String id, {
+  MasteryLevel mastery = MasteryLevel.newQuestion,
+  int reviewCount = 0,
+  DateTime? createdAt,
+  DateTime? lastReviewedAt,
+}) {
+  final now = createdAt ?? DateTime.now();
   return QuestionRecord(
     id: id,
     imagePath: '/tmp/$id.jpg',
@@ -21,7 +26,7 @@ QuestionRecord _makeQuestion(String id,
     tags: const [],
     createdAt: now,
     updatedAt: now,
-    lastReviewedAt: null,
+    lastReviewedAt: lastReviewedAt,
     reviewCount: reviewCount,
     isFavorite: false,
     contentStatus: ContentStatus.ready,
@@ -41,27 +46,37 @@ void main() {
     controller = ReviewController(repository: repo, logRepository: logRepo);
   });
 
-  test('markMastered updates mastery and increments reviewCount', () async {
+  test('markMastered updates mastery, increments reviewCount, and stamps lastReviewedAt',
+      () async {
+    final before = DateTime.now().subtract(const Duration(seconds: 1));
     await repo.saveDraft(_makeQuestion('q-1'));
     final result = await controller.markMastered('q-1');
 
     expect(result.masteryLevel, MasteryLevel.mastered);
     expect(result.reviewCount, 1);
+    expect(result.lastReviewedAt, isNotNull);
+    expect(result.lastReviewedAt!.isAfter(before), isTrue);
 
     final persisted = await repo.getById('q-1');
     expect(persisted!.masteryLevel, MasteryLevel.mastered);
     expect(persisted.reviewCount, 1);
+    expect(persisted.lastReviewedAt, isNotNull);
   });
 
-  test('markReviewing transitions from newQuestion to reviewing', () async {
+  test('markReviewing transitions from newQuestion to reviewing and stamps lastReviewedAt',
+      () async {
+    final before = DateTime.now().subtract(const Duration(seconds: 1));
     await repo.saveDraft(_makeQuestion('q-1'));
     final result = await controller.markReviewing('q-1');
 
     expect(result.masteryLevel, MasteryLevel.reviewing);
     expect(result.reviewCount, 1);
+    expect(result.lastReviewedAt, isNotNull);
+    expect(result.lastReviewedAt!.isAfter(before), isTrue);
 
     final persisted = await repo.getById('q-1');
     expect(persisted!.masteryLevel, MasteryLevel.reviewing);
+    expect(persisted.lastReviewedAt, isNotNull);
   });
 
   test('markReviewing increments reviewCount when already reviewing', () async {
@@ -95,6 +110,55 @@ void main() {
     final due = await controller.getDueQuestions();
     expect(due.length, 2);
     expect(due.map((q) => q.id), containsAll(['q-1', 'q-2']));
+  });
+
+  test(
+      'getDueQuestions prioritizes unreviewed newest-first and rotates reviewed items behind unreviewed',
+      () async {
+    await repo.saveDraft(_makeQuestion(
+      'q-unreviewed-old',
+      createdAt: DateTime(2026, 1, 1),
+    ));
+    await repo.saveDraft(_makeQuestion(
+      'q-unreviewed-new',
+      createdAt: DateTime(2026, 1, 3),
+    ));
+    await repo.saveDraft(_makeQuestion(
+      'q-reviewed-earlier',
+      mastery: MasteryLevel.reviewing,
+      createdAt: DateTime(2026, 1, 4),
+      lastReviewedAt: DateTime(2026, 1, 5, 10),
+    ));
+    await repo.saveDraft(_makeQuestion(
+      'q-reviewed-later',
+      mastery: MasteryLevel.reviewing,
+      createdAt: DateTime(2026, 1, 5),
+      lastReviewedAt: DateTime(2026, 1, 5, 12),
+    ));
+
+    final due = await controller.getDueQuestions();
+    expect(
+      due.map((q) => q.id).toList(),
+      <String>[
+        'q-unreviewed-new',
+        'q-unreviewed-old',
+        'q-reviewed-earlier',
+        'q-reviewed-later',
+      ],
+    );
+
+    // Marking the front unreviewed item as reviewing rotates it to the end.
+    await controller.markReviewing('q-unreviewed-new');
+    final afterMark = await controller.getDueQuestions();
+    expect(
+      afterMark.map((q) => q.id).toList(),
+      <String>[
+        'q-unreviewed-old',
+        'q-reviewed-earlier',
+        'q-reviewed-later',
+        'q-unreviewed-new',
+      ],
+    );
   });
 
   test('full review lifecycle: new -> reviewing -> mastered', () async {

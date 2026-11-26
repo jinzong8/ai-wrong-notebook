@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:smart_wrong_notebook/src/data/remote/ai/ai_analysis_service.dart';
@@ -218,19 +219,56 @@ class QueuedAiLearningTaskCoordinator implements AiLearningTaskCoordinator {
     String parentQuestionId,
     String jobId,
   ) async {
-    final jobs = await _repository
-        .watchByParentQuestionId(parentQuestionId)
-        .firstWhere((items) => items.any(
-              (job) => job.id == jobId && job.isTerminal,
-            ));
-    final completed = jobs.firstWhere((job) => job.id == jobId);
-    if (completed.status != AnalysisJobStatus.completed ||
-        completed.resultJson == null) {
-      throw AiAnalysisException(
-        completed.errorMessage ?? 'AI 任务失败，请重试',
-      );
+    final completer = Completer<AnalysisJob>();
+    late final StreamSubscription<AnalysisJob> completedSub;
+    late final StreamSubscription<List<AnalysisJob>> watchSub;
+
+    void finishWithJob(AnalysisJob job) {
+      if (completer.isCompleted) return;
+      if (job.status != AnalysisJobStatus.completed || job.resultJson == null) {
+        completer.completeError(
+          AiAnalysisException(
+            job.errorMessage ?? 'AI 任务失败，请重试',
+          ),
+        );
+      } else {
+        completer.complete(job);
+      }
     }
-    return completed;
+
+    completedSub = _executor.completedJobs.listen((job) {
+      if (job.id == jobId) {
+        finishWithJob(job);
+      }
+    });
+
+    watchSub = _repository
+        .watchByParentQuestionId(parentQuestionId)
+        .listen((items) {
+      if (items.every((j) => j.id != jobId)) {
+        if (!completer.isCompleted) {
+          completer.completeError(
+            AiAnalysisException('AI 任务已取消或结束，请重试'),
+          );
+        }
+        return;
+      }
+      final match = items.firstWhere((j) => j.id == jobId);
+      if (match.isTerminal) {
+        finishWithJob(match);
+      }
+    }, onError: (Object error, StackTrace stackTrace) {
+      if (!completer.isCompleted) {
+        completer.completeError(error, stackTrace);
+      }
+    });
+
+    try {
+      return await completer.future;
+    } finally {
+      await completedSub.cancel();
+      await watchSub.cancel();
+    }
   }
 
   Future<AnalysisJob?> _activeExerciseGenerationJob(String questionId) async {

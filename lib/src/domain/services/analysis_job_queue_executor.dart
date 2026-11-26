@@ -151,12 +151,17 @@ class AnalysisJobQueueExecutor {
           progress: progress,
         ),
       ));
-      await _repository.markCompleted(job.id, resultJson: result);
-      final completed = (await _repository.getById(job.id)) ??
-          job.copyWith(
-            status: AnalysisJobStatus.completed,
-            resultJson: result,
-          );
+      final marked = await _repository.markCompleted(
+        job.id,
+        resultJson: result,
+      );
+      if (!marked) {
+        return;
+      }
+      final completed = await _repository.getById(job.id);
+      if (completed == null) {
+        return;
+      }
       if (!_completedJobsController.isClosed) {
         _completedJobsController.add(completed);
       }

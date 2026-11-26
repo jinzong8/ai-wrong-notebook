@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:drift/drift.dart';
 import 'package:smart_wrong_notebook/src/data/local/app_database.dart' as db;
 import 'package:smart_wrong_notebook/src/domain/models/question_record.dart'
@@ -8,7 +11,6 @@ import 'package:smart_wrong_notebook/src/domain/models/subject.dart';
 import 'package:smart_wrong_notebook/src/domain/models/analysis_result.dart';
 import 'package:smart_wrong_notebook/src/domain/models/generated_exercise.dart';
 import 'package:smart_wrong_notebook/src/data/repositories/question_repository.dart';
-import 'dart:convert';
 
 class DriftQuestionRepository implements QuestionRepository {
   DriftQuestionRepository(this._db);
@@ -16,7 +18,9 @@ class DriftQuestionRepository implements QuestionRepository {
 
   @override
   Future<List<domain.QuestionRecord>> listAll() async {
-    final rows = await _db.select(_db.questionRecords).get();
+    final rows = await (_db.select(_db.questionRecords)
+          ..orderBy([(t) => OrderingTerm.desc(t.createdAt)]))
+        .get();
     final records = <domain.QuestionRecord>[];
     for (final row in rows) {
       records.add(await _toModel(row));
@@ -50,10 +54,14 @@ class DriftQuestionRepository implements QuestionRepository {
             aiAnalysisJson: Value(record.analysisResult != null
                 ? jsonEncode(record.analysisResult!.toJson())
                 : null),
-            tags: Value(record.tags.join(',')),
-            aiTags: Value(record.aiTags.join(',')),
-            aiKnowledgePoints: Value(record.aiKnowledgePoints.join(',')),
-            customTags: Value(record.customTags.join(',')),
+            tags: Value(jsonEncode(<String, dynamic>{
+              'items': record.tags,
+              'contentFormat': record.contentFormat.name,
+              'isFavorite': record.isFavorite,
+            })),
+            aiTags: Value(jsonEncode(record.aiTags)),
+            aiKnowledgePoints: Value(jsonEncode(record.aiKnowledgePoints)),
+            customTags: Value(jsonEncode(record.customTags)),
             parentQuestionId: Value(record.parentQuestionId),
             rootQuestionId: Value(record.rootQuestionId),
             splitOrder: Value(record.splitOrder),
@@ -111,6 +119,13 @@ class DriftQuestionRepository implements QuestionRepository {
 
   @override
   Future<void> delete(String id) async {
+    final existing = await (_db.select(_db.questionRecords)
+          ..where((t) => t.id.equals(id)))
+        .getSingleOrNull();
+    final imagePath = existing?.originalImagePath;
+
+    await (_db.delete(_db.reviewLogs)..where((t) => t.questionId.equals(id)))
+        .go();
     await (_db.delete(_db.aiConversationMessages)
           ..where((t) => t.questionId.equals(id)))
         .go();
@@ -118,10 +133,94 @@ class DriftQuestionRepository implements QuestionRepository {
           ..where((t) => t.questionId.equals(id)))
         .go();
     await (_db.delete(_db.questionRecords)..where((t) => t.id.equals(id))).go();
+
+    if (imagePath != null && imagePath.isNotEmpty) {
+      final remainingWithImage = await (_db.select(_db.questionRecords)
+            ..where((t) => t.originalImagePath.equals(imagePath)))
+          .get();
+      if (remainingWithImage.isEmpty) {
+        try {
+          final file = File(imagePath);
+          if (await file.exists()) {
+            await file.delete();
+          }
+        } catch (_) {}
+      }
+    }
   }
 
   @override
   Future<void> update(domain.QuestionRecord record) => saveDraft(record);
+
+  List<String> _decodeStringList(String raw) {
+    if (raw.isEmpty) return <String>[];
+    final trimmed = raw.trimLeft();
+    if (trimmed.startsWith('[')) {
+      try {
+        final decoded = jsonDecode(trimmed);
+        if (decoded is List) {
+          return decoded
+              .map((e) => e.toString())
+              .where((s) => s.isNotEmpty)
+              .toList();
+        }
+      } catch (_) {
+        // Fall back to legacy comma-separated decoding below.
+      }
+    }
+    return raw.split(',').where((s) => s.isNotEmpty).toList();
+  }
+
+  ({
+    List<String> items,
+    domain.QuestionContentFormat contentFormat,
+    bool isFavorite,
+  }) _decodeTagsEnvelope(String raw) {
+    if (raw.isEmpty) {
+      return (
+        items: <String>[],
+        contentFormat: domain.QuestionContentFormat.plain,
+        isFavorite: false,
+      );
+    }
+    final trimmed = raw.trimLeft();
+    if (trimmed.startsWith('{')) {
+      try {
+        final decoded = jsonDecode(trimmed);
+        if (decoded is Map) {
+          final items = (decoded['items'] as List? ?? const <Object>[])
+              .map((e) => e.toString())
+              .where((s) => s.isNotEmpty)
+              .toList();
+          final formatName = decoded['contentFormat']?.toString();
+          final contentFormat = domain.QuestionContentFormat.values.firstWhere(
+            (f) => f.name == formatName,
+            orElse: () => domain.QuestionContentFormat.plain,
+          );
+          final isFavorite = decoded['isFavorite'] == true;
+          return (
+            items: items,
+            contentFormat: contentFormat,
+            isFavorite: isFavorite,
+          );
+        }
+      } catch (_) {
+        // Fall through to list/comma fallback.
+      }
+    }
+    if (trimmed.startsWith('[')) {
+      return (
+        items: _decodeStringList(raw),
+        contentFormat: domain.QuestionContentFormat.plain,
+        isFavorite: false,
+      );
+    }
+    return (
+      items: raw.split(',').where((s) => s.isNotEmpty).toList(),
+      contentFormat: domain.QuestionContentFormat.plain,
+      isFavorite: false,
+    );
+  }
 
   Future<domain.QuestionRecord> _toModel(db.QuestionRecord row) async {
     AnalysisResult? analysisResult;
@@ -159,6 +258,8 @@ class DriftQuestionRepository implements QuestionRepository {
                 ))
             .toList();
 
+    final tagsEnvelope = _decodeTagsEnvelope(row.tags);
+
     return domain.QuestionRecord(
       id: row.id,
       imagePath: row.originalImagePath ?? '',
@@ -166,13 +267,13 @@ class DriftQuestionRepository implements QuestionRepository {
           orElse: () => Subject.unknown),
       extractedQuestionText: row.originalText,
       normalizedQuestionText: row.correctedText,
-      contentFormat: domain.QuestionContentFormat.plain,
-      tags: row.tags.isNotEmpty ? row.tags.split(',') : <String>[],
+      contentFormat: tagsEnvelope.contentFormat,
+      tags: tagsEnvelope.items,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
       lastReviewedAt: row.nextReviewAt,
       reviewCount: row.reviewCount,
-      isFavorite: false,
+      isFavorite: tagsEnvelope.isFavorite,
       contentStatus: ContentStatus.values.firstWhere(
           (c) => c.name == row.contentStatus,
           orElse: () => ContentStatus.processing),
@@ -181,12 +282,9 @@ class DriftQuestionRepository implements QuestionRepository {
           orElse: () => MasteryLevel.newQuestion),
       analysisResult: analysisResult,
       savedExercises: savedExercises,
-      aiTags: row.aiTags.isNotEmpty ? row.aiTags.split(',') : <String>[],
-      aiKnowledgePoints: row.aiKnowledgePoints.isNotEmpty
-          ? row.aiKnowledgePoints.split(',')
-          : <String>[],
-      customTags:
-          row.customTags.isNotEmpty ? row.customTags.split(',') : <String>[],
+      aiTags: _decodeStringList(row.aiTags),
+      aiKnowledgePoints: _decodeStringList(row.aiKnowledgePoints),
+      customTags: _decodeStringList(row.customTags),
       parentQuestionId: row.parentQuestionId,
       rootQuestionId: row.rootQuestionId,
       splitOrder: row.splitOrder,

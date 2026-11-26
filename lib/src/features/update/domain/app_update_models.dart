@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-const String kDefaultFallbackAppVersion = '1.0.11';
+const String kDefaultFallbackAppVersion = '1.0.12';
 const String kGitHubLatestReleaseApiUrl =
     'https://api.github.com/repos/jinzong8/ai-wrong-notebook/releases/latest';
 

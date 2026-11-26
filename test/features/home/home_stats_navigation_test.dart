@@ -129,4 +129,47 @@ void main() {
     expect(masteredQuestions.map((question) => question.id),
         <String>['today-mastered']);
   });
+
+  testWidgets('HomeScreen recalculates 今日新增 when resuming across midnight',
+      (tester) async {
+    final repository = InMemoryQuestionRepository();
+    var fakeNow = DateTime(2026, 11, 25, 22, 30);
+    await repository.saveDraft(_question(
+      id: 'q-1',
+      createdAt: DateTime(2026, 11, 25, 20, 0),
+      masteryLevel: MasteryLevel.newQuestion,
+    ));
+    await repository.saveDraft(_question(
+      id: 'q-2',
+      createdAt: DateTime(2026, 11, 25, 21, 0),
+      masteryLevel: MasteryLevel.newQuestion,
+    ));
+    await repository.saveDraft(_question(
+      id: 'q-3',
+      createdAt: DateTime(2026, 11, 25, 22, 0),
+      masteryLevel: MasteryLevel.newQuestion,
+    ));
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: <Override>[
+          questionRepositoryProvider.overrideWithValue(repository),
+        ],
+        child: MaterialApp(
+          home: Scaffold(body: HomeScreen(clock: () => fakeNow)),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('今日 +3'), findsOneWidget);
+
+    // Simulate midnight rollover and app returning to foreground.
+    fakeNow = DateTime(2026, 11, 26, 9, 0);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pumpAndSettle();
+
+    expect(find.text('今日 +3'), findsNothing);
+    expect(find.text('0'), findsWidgets);
+  });
 }

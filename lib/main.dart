@@ -8,16 +8,18 @@ import 'package:go_router/go_router.dart';
 import 'package:smart_wrong_notebook/src/app/providers.dart';
 import 'package:smart_wrong_notebook/src/data/repositories/drift_settings_repository.dart';
 import 'package:smart_wrong_notebook/src/data/repositories/drift_question_repository.dart';
+import 'package:smart_wrong_notebook/src/data/repositories/drift_review_log_repository.dart';
 import 'package:smart_wrong_notebook/src/data/repositories/drift_ai_conversation_repository.dart';
 import 'package:smart_wrong_notebook/src/data/repositories/drift_analysis_job_repository.dart';
 import 'package:smart_wrong_notebook/src/data/local/app_database.dart'
-    hide QuestionRecord;
+    hide AnalysisJob, QuestionRecord, ReviewLog;
 import 'package:smart_wrong_notebook/src/data/remote/ai/ai_analysis_service.dart';
 import 'package:smart_wrong_notebook/src/data/services/app_analysis_job_runner.dart';
 import 'package:smart_wrong_notebook/src/data/services/ai_learning_task_coordinator.dart';
 import 'package:smart_wrong_notebook/src/data/services/question_analysis_coordinator.dart';
 import 'package:smart_wrong_notebook/src/data/services/single_question_auto_save.dart';
 import 'package:smart_wrong_notebook/src/domain/models/ai_task_spec.dart';
+import 'package:smart_wrong_notebook/src/domain/models/analysis_job.dart';
 import 'package:smart_wrong_notebook/src/domain/models/question_record.dart';
 import 'package:smart_wrong_notebook/src/domain/services/analysis_job_queue_executor.dart';
 import 'package:smart_wrong_notebook/src/app/theme/app_theme.dart';
@@ -53,6 +55,7 @@ void main() async {
   final db = AppDatabase();
   final settingsRepo = DriftSettingsRepository(db);
   final questionRepo = DriftQuestionRepository(db);
+  final reviewLogRepo = DriftReviewLogRepository(db);
   final aiConversationRepo = DriftAiConversationRepository(db);
   final aiService = AiAnalysisService(settingsRepository: settingsRepo);
   final analysisJobRepo = DriftAnalysisJobRepository(db);
@@ -75,6 +78,11 @@ void main() async {
           Map<String, dynamic>.from(decoded),
         );
         if (isMultiQuestionAnalysisResult(record)) return;
+
+        final liveJob = await analysisJobRepo.getById(completedJob.id);
+        if (liveJob == null || liveJob.status == AnalysisJobStatus.cancelled) {
+          return;
+        }
 
         // Ensure idempotent persistence and clear the pending background task
         // so single questions flow straight into the notebook without piling up
@@ -206,6 +214,7 @@ void main() async {
       overrides: [
         settingsRepositoryProvider.overrideWithValue(settingsRepo),
         questionRepositoryProvider.overrideWithValue(questionRepo),
+        reviewLogRepositoryProvider.overrideWithValue(reviewLogRepo),
         aiConversationRepositoryProvider.overrideWithValue(aiConversationRepo),
         analysisJobRepositoryProvider.overrideWithValue(analysisJobRepo),
         backgroundQuestionVersionNotifierProvider

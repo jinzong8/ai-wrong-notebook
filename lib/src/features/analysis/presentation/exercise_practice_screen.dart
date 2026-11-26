@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -25,15 +27,193 @@ class _ExercisePracticeState extends ConsumerState<ExercisePracticeScreen> {
   String? _questionId;
   String? _practiceCandidateId;
   String? _exerciseSourceVersion;
+  bool? _lastIsReviewQuery;
   bool _isJudging = false;
   bool _showCompletion = false;
   bool _isGeneratingNextRound = false;
   final TextEditingController _freeInputController = TextEditingController();
 
   @override
+  void initState() {
+    super.initState();
+    ref.listenManual<QuestionRecord?>(
+      currentQuestionProvider,
+      (_, __) => _syncFromProviders(triggerSetState: true),
+    );
+    ref.listenManual<PracticeContext?>(
+      currentPracticeContextProvider,
+      (_, __) => _syncFromProviders(triggerSetState: true),
+    );
+  }
+
+  bool _readIsReviewQuery(BuildContext context) {
+    try {
+      return GoRouterState.of(context).uri.queryParameters['review'] == '1';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final isReviewQuery = _readIsReviewQuery(context);
+    _syncFromProviders(
+      isReviewQueryOverride: isReviewQuery,
+      triggerSetState: false,
+    );
+  }
+
+  @override
   void dispose() {
     _freeInputController.dispose();
     super.dispose();
+  }
+
+  void _syncFromProviders({
+    bool? isReviewQueryOverride,
+    required bool triggerSetState,
+  }) {
+    final current = ref.read(currentQuestionProvider);
+    final practiceContext = ref.read(currentPracticeContextProvider);
+
+    if (current == null) {
+      if (_exercises != null || _questionId != null) {
+        void clearState() {
+          _index = 0;
+          _exercises = null;
+          _questionId = null;
+          _practiceCandidateId = null;
+          _exerciseSourceVersion = null;
+          _showCompletion = false;
+        }
+
+        if (triggerSetState && mounted) {
+          setState(clearState);
+        } else {
+          clearState();
+        }
+      }
+      return;
+    }
+
+    final isReviewQuery =
+        isReviewQueryOverride ?? (_lastIsReviewQuery ?? false);
+    final sourceExercises = _practiceExercises(current, practiceContext);
+    final sourceVersion = _exerciseSourceVersionOf(sourceExercises);
+    final questionOrCandidateChanged = current.id != _questionId ||
+        practiceContext?.candidateId != _practiceCandidateId;
+    final reviewModeChanged = _lastIsReviewQuery != isReviewQuery;
+    final needsReload = _exercises == null ||
+        questionOrCandidateChanged ||
+        reviewModeChanged ||
+        sourceVersion != _exerciseSourceVersion;
+
+    if (!needsReload) return;
+
+    final isAnalysisSource =
+        practiceContext?.source == PracticeContextSource.analysis;
+
+    late List<GeneratedExercise> nextExercises;
+    late int nextIndex;
+    late bool nextShowCompletion;
+
+    if (!questionOrCandidateChanged &&
+        !reviewModeChanged &&
+        _exercises != null) {
+      final freshRound = _buildRoundFromSource(
+        sourceExercises,
+        questionId: current.id,
+        resetAnswers: false,
+      );
+      nextExercises = freshRound.asMap().entries.map((entry) {
+        final idx = entry.key;
+        final fresh = entry.value;
+        if (idx < _exercises!.length) {
+          final existing = _exercises![idx];
+          if (existing.id == fresh.id) {
+            return fresh.copyWith(
+              userAnswer: fresh.userAnswer ?? existing.userAnswer,
+              isCorrect: fresh.isCorrect ?? existing.isCorrect,
+            );
+          }
+        }
+        return fresh;
+      }).toList();
+      nextIndex = nextExercises.isEmpty
+          ? 0
+          : _index.clamp(0, nextExercises.length - 1);
+      nextShowCompletion = _showCompletion;
+    } else {
+      final allSourceAnswered =
+          _areLatestRoundExercisesAllAnswered(sourceExercises);
+      final resetAnswers =
+          isAnalysisSource && allSourceAnswered && !isReviewQuery;
+      nextExercises = _buildRoundFromSource(
+        sourceExercises,
+        questionId: current.id,
+        resetAnswers: resetAnswers,
+      );
+
+      if (nextExercises.isEmpty) {
+        nextIndex = 0;
+        nextShowCompletion = false;
+      } else if (isReviewQuery) {
+        nextIndex = 0;
+        nextShowCompletion = false;
+      } else if (nextExercises.every((e) => e.isCorrect != null)) {
+        nextIndex = 0;
+        nextShowCompletion = true;
+      } else {
+        final firstUnanswered =
+            nextExercises.indexWhere((e) => e.isCorrect == null);
+        nextIndex = firstUnanswered >= 0 ? firstUnanswered : 0;
+        nextShowCompletion = false;
+      }
+    }
+
+    void applySync() {
+      _questionId = current.id;
+      _practiceCandidateId = practiceContext?.candidateId;
+      _exerciseSourceVersion = sourceVersion;
+      _lastIsReviewQuery = isReviewQuery;
+      _exercises = nextExercises;
+      _index = nextIndex;
+      _showCompletion = nextShowCompletion;
+      final text = (nextExercises.isNotEmpty && nextIndex < nextExercises.length)
+          ? (nextExercises[nextIndex].userAnswer ?? '')
+          : '';
+      if (_freeInputController.text != text) {
+        _freeInputController.value = TextEditingValue(
+          text: text,
+          selection: TextSelection.collapsed(offset: text.length),
+        );
+      }
+    }
+
+    if (triggerSetState && mounted) {
+      setState(applySync);
+    } else {
+      applySync();
+    }
+  }
+
+  void _goToExerciseIndex(int targetIndex) {
+    final exercises = _exercises;
+    if (exercises == null ||
+        targetIndex < 0 ||
+        targetIndex >= exercises.length) {
+      return;
+    }
+    final nextAnswer = exercises[targetIndex].userAnswer ?? '';
+    _freeInputController.value = TextEditingValue(
+      text: nextAnswer,
+      selection: TextSelection.collapsed(offset: nextAnswer.length),
+    );
+    setState(() {
+      _index = targetIndex;
+      _showCompletion = false;
+    });
   }
 
   @override
@@ -56,24 +236,7 @@ class _ExercisePracticeState extends ConsumerState<ExercisePracticeScreen> {
       );
     }
 
-    final sourceExercises = _practiceExercises(current, practiceContext);
-    final sourceVersion = _exerciseSourceVersionOf(sourceExercises);
-    if (current.id != _questionId ||
-        practiceContext?.candidateId != _practiceCandidateId ||
-        sourceVersion != _exerciseSourceVersion ||
-        _exercises == null) {
-      _index = 0;
-      _questionId = current.id;
-      _practiceCandidateId = practiceContext?.candidateId;
-      _exerciseSourceVersion = sourceVersion;
-      _exercises = List.from(_nextPracticeRound(
-        sourceExercises,
-        questionId: current.id,
-      ));
-      _showCompletion = false;
-    }
-
-    final exercises = _exercises!;
+    final exercises = _exercises ?? const <GeneratedExercise>[];
     if (_showCompletion) {
       return _buildCompletionScreen(current, exercises, fallbackRoute);
     }
@@ -111,19 +274,56 @@ class _ExercisePracticeState extends ConsumerState<ExercisePracticeScreen> {
       );
     }
 
-    final exercise = exercises[_index];
+    final safeIndex = _index.clamp(0, exercises.length - 1);
+    final exercise = exercises[safeIndex];
     final answered = exercise.isCorrect != null;
     final isCorrect = exercise.isCorrect == true;
-    final isLast = _index >= exercises.length - 1;
+    final isLast = safeIndex >= exercises.length - 1;
     final answeredCount = exercises.where((e) => e.isCorrect != null).length;
+    final hasOptions =
+        exercise.options != null && exercise.options!.isNotEmpty;
     final colorScheme = Theme.of(context).colorScheme;
     final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    final Widget primaryActionButton = answered
+        ? FilledButton.icon(
+            onPressed: () {
+              if (isLast) {
+                _finishRound(current, exercises);
+              } else {
+                _goToExerciseIndex(safeIndex + 1);
+              }
+            },
+            icon: Icon(isLast
+                ? CupertinoIcons.checkmark_circle_fill
+                : CupertinoIcons.arrow_right),
+            label: Text(isLast ? '完成练习' : '下一题'),
+            style: FilledButton.styleFrom(
+                minimumSize: const Size(double.infinity, 48)),
+          )
+        : _isJudging
+            ? const SizedBox(
+                height: 48,
+                child: Center(child: CircularProgressIndicator()),
+              )
+            : FilledButton.icon(
+                onPressed: exercise.userAnswer != null &&
+                        exercise.userAnswer!.trim().isNotEmpty
+                    ? () => hasOptions
+                        ? _submitAnswer(exercises, safeIndex)
+                        : _submitFreeAnswer(exercises, safeIndex)
+                    : null,
+                style: FilledButton.styleFrom(
+                    minimumSize: const Size(double.infinity, 48)),
+                icon: const Icon(CupertinoIcons.checkmark),
+                label: const Text('提交答案'),
+              );
 
     return AppBackScope(
       onBack: () => context.go(fallbackRoute),
       child: Scaffold(
         appBar: AppBar(
-          title: Text('举一反三 ${_index + 1}/${exercises.length}'),
+          title: Text('举一反三 ${safeIndex + 1}/${exercises.length}'),
           leading: IconButton(
             icon: const Icon(CupertinoIcons.xmark),
             onPressed: () => context.go(fallbackRoute),
@@ -170,7 +370,75 @@ class _ExercisePracticeState extends ConsumerState<ExercisePracticeScreen> {
                               color: colorScheme.onSurfaceVariant)),
                     ],
                   ),
-                  const SizedBox(height: 20),
+                  if (exercises.length > 1) ...<Widget>[
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: exercises.asMap().entries.map((entry) {
+                        final idx = entry.key;
+                        final item = entry.value;
+                        final selected = idx == safeIndex;
+                        final itemAnswered = item.isCorrect != null;
+                        final itemCorrect = item.isCorrect == true;
+
+                        return InkWell(
+                          key: Key('exercise-step-chip-$idx'),
+                          onTap: _isJudging
+                              ? null
+                              : () => _goToExerciseIndex(idx),
+                          borderRadius: BorderRadius.circular(999),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: selected
+                                  ? colorScheme.primary
+                                  : colorScheme.surface,
+                              borderRadius: BorderRadius.circular(999),
+                              border: Border.all(
+                                color: selected
+                                    ? colorScheme.primary
+                                    : colorScheme.outlineVariant,
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: <Widget>[
+                                Text(
+                                  '第 ${idx + 1} 题',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: selected
+                                        ? FontWeight.w700
+                                        : FontWeight.w500,
+                                    color: selected
+                                        ? colorScheme.onPrimary
+                                        : colorScheme.onSurface,
+                                  ),
+                                ),
+                                if (itemAnswered) ...<Widget>[
+                                  const SizedBox(width: 4),
+                                  Icon(
+                                    itemCorrect
+                                        ? CupertinoIcons.checkmark_circle_fill
+                                        : CupertinoIcons.xmark_circle_fill,
+                                    size: 13,
+                                    color: selected
+                                        ? colorScheme.onPrimary
+                                        : (itemCorrect
+                                            ? const Color(0xFF16A34A)
+                                            : const Color(0xFFEA580C)),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  ],
+                  const SizedBox(height: 16),
                   Container(
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
@@ -188,11 +456,13 @@ class _ExercisePracticeState extends ConsumerState<ExercisePracticeScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: <Widget>[
-                        Text('第 ${_index + 1} 题',
-                            style: TextStyle(
-                                fontSize: 12,
-                                color: colorScheme.onSurfaceVariant)),
-                        const SizedBox(height: 8),
+                        if (exercises.length == 1) ...<Widget>[
+                          Text('第 1 题',
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  color: colorScheme.onSurfaceVariant)),
+                          const SizedBox(height: 8),
+                        ],
                         MathContentView(exercise.question,
                             style: Theme.of(context).textTheme.titleMedium),
                       ],
@@ -207,13 +477,23 @@ class _ExercisePracticeState extends ConsumerState<ExercisePracticeScreen> {
                         showAuxiliaryButton: answered,
                       ),
                     ),
-                  if (exercise.options != null && exercise.options!.isNotEmpty)
+                  if (hasOptions)
                     ...exercise.options!.asMap().entries.map((entry) {
-                      final parsedOption = _parseOption(entry.value);
+                      final parsedOption =
+                          _parseOption(entry.value, entry.key);
                       final optionLetter = parsedOption.label;
                       final optionText = parsedOption.content;
-                      final isSelected = exercise.userAnswer == optionLetter;
-                      final isCorrectAnswer = exercise.answer == optionLetter;
+                      final isSelected = exercise.userAnswer != null &&
+                          _isMatchingOptionAnswer(
+                            rawAnswer: exercise.userAnswer!,
+                            optionLetter: optionLetter,
+                            optionText: optionText,
+                          );
+                      final isCorrectAnswer = _isMatchingOptionAnswer(
+                        rawAnswer: exercise.answer,
+                        optionLetter: optionLetter,
+                        optionText: optionText,
+                      );
 
                       Color? borderColor;
                       Color? bgColor;
@@ -326,14 +606,46 @@ class _ExercisePracticeState extends ConsumerState<ExercisePracticeScreen> {
                         ),
                         onChanged: (value) {
                           setState(() {
-                            _exercises![_index] = _exercises![_index]
+                            _exercises![safeIndex] = _exercises![safeIndex]
                                 .copyWith(userAnswer: value.trim());
                           });
                         },
                       ),
                     )
                   else
-                    const SizedBox.shrink(),
+                    Container(
+                      key: const Key('free-input-user-answer-card'),
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: colorScheme.surface,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: colorScheme.outlineVariant),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Text(
+                            '你的作答',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          MathContentView(
+                            exercise.userAnswer?.trim().isNotEmpty == true
+                                ? exercise.userAnswer!
+                                : '(未填写)',
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: colorScheme.onSurface,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   if (answered) ...<Widget>[
                     const SizedBox(height: 16),
                     Container(
@@ -415,35 +727,26 @@ class _ExercisePracticeState extends ConsumerState<ExercisePracticeScreen> {
             SafeArea(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
-                child: answered
-                    ? FilledButton.icon(
-                        onPressed: () {
-                          if (isLast) {
-                            _finishRound(current, exercises);
-                          } else {
-                            _freeInputController.clear();
-                            setState(() => _index++);
-                          }
-                        },
-                        icon: Icon(isLast
-                            ? CupertinoIcons.checkmark_circle_fill
-                            : CupertinoIcons.arrow_right),
-                        label: Text(isLast ? '完成练习' : '下一题'),
-                        style: FilledButton.styleFrom(
-                            minimumSize: const Size(double.infinity, 48)),
-                      )
-                    : _isJudging
-                        ? const Center(child: CircularProgressIndicator())
-                        : FilledButton.icon(
-                            onPressed: exercise.userAnswer != null &&
-                                    exercise.userAnswer!.isNotEmpty
-                                ? () => _submitAnswer(exercises, _index)
-                                : null,
-                            style: FilledButton.styleFrom(
-                                minimumSize: const Size(double.infinity, 48)),
-                            icon: const Icon(CupertinoIcons.checkmark),
-                            label: const Text('提交答案'),
+                child: safeIndex > 0
+                    ? Row(
+                        children: <Widget>[
+                          OutlinedButton.icon(
+                            key: const Key('exercise-prev-button'),
+                            onPressed: _isJudging
+                                ? null
+                                : () => _goToExerciseIndex(safeIndex - 1),
+                            icon: const Icon(CupertinoIcons.arrow_left,
+                                size: 16),
+                            label: const Text('上一题'),
+                            style: OutlinedButton.styleFrom(
+                              minimumSize: const Size(104, 48),
+                            ),
                           ),
+                          const SizedBox(width: 12),
+                          Expanded(child: primaryActionButton),
+                        ],
+                      )
+                    : primaryActionButton,
               ),
             ),
           ],
@@ -458,6 +761,7 @@ class _ExercisePracticeState extends ConsumerState<ExercisePracticeScreen> {
     String fallbackRoute,
   ) {
     final colorScheme = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final correctCount = exercises.where((e) => e.isCorrect == true).length;
     final roundIndex = _currentRoundIndex(exercises);
     final practiceContext = ref.read(currentPracticeContextProvider);
@@ -480,61 +784,164 @@ class _ExercisePracticeState extends ConsumerState<ExercisePracticeScreen> {
             child: Column(
               children: <Widget>[
                 Expanded(
-                  child: Center(
-                    child: Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(24),
-                      decoration: BoxDecoration(
-                        color: colorScheme.surface,
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: colorScheme.outlineVariant),
-                      ),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: <Widget>[
-                          Container(
-                            width: 68,
-                            height: 68,
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF16A34A)
-                                  .withValues(alpha: 0.12),
-                              borderRadius: BorderRadius.circular(34),
-                            ),
-                            child: const Icon(
-                              CupertinoIcons.checkmark_circle_fill,
-                              size: 38,
-                              color: Color(0xFF16A34A),
-                            ),
-                          ),
-                          const SizedBox(height: 18),
-                          Text(
-                            '举一反三完成',
-                            style: Theme.of(context)
-                                .textTheme
-                                .titleLarge
-                                ?.copyWith(fontWeight: FontWeight.w700),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            '第 $roundIndex轮 ${exercises.length}题，答对 $correctCount题',
-                            style:
-                                TextStyle(color: colorScheme.onSurfaceVariant),
-                          ),
-                          if (!isAnalysisSource) ...<Widget>[
-                            const SizedBox(height: 8),
-                            Text(
-                              '本轮练习结果已保存到错题本',
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: colorScheme.onSurfaceVariant,
+                  child: ListView(
+                    children: <Widget>[
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(24),
+                        decoration: BoxDecoration(
+                          color: colorScheme.surface,
+                          borderRadius: BorderRadius.circular(20),
+                          border:
+                              Border.all(color: colorScheme.outlineVariant),
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: <Widget>[
+                            Container(
+                              width: 64,
+                              height: 64,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF16A34A)
+                                    .withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(32),
+                              ),
+                              child: const Icon(
+                                CupertinoIcons.checkmark_circle_fill,
+                                size: 36,
+                                color: Color(0xFF16A34A),
                               ),
                             ),
+                            const SizedBox(height: 16),
+                            Text(
+                              '举一反三完成',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .titleLarge
+                                  ?.copyWith(fontWeight: FontWeight.w700),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              '第 $roundIndex轮 ${exercises.length}题，答对 $correctCount题',
+                              style: TextStyle(
+                                  color: colorScheme.onSurfaceVariant),
+                            ),
+                            if (!isAnalysisSource) ...<Widget>[
+                              const SizedBox(height: 6),
+                              Text(
+                                '本轮练习结果已保存到错题本',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ],
                           ],
-                        ],
+                        ),
                       ),
-                    ),
+                      if (exercises.isNotEmpty) ...<Widget>[
+                        const SizedBox(height: 16),
+                        ...exercises.asMap().entries.map((entry) {
+                          final i = entry.key;
+                          final item = entry.value;
+                          final passed = item.isCorrect == true;
+                          final statusColor = passed
+                              ? const Color(0xFF16A34A)
+                              : const Color(0xFFEA580C);
+                          final statusLabel = passed
+                              ? '第 ${i + 1} 题 · 答对'
+                              : '第 ${i + 1} 题 · 答错';
+
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 8),
+                            child: InkWell(
+                              key: Key('completion-exercise-row-$i'),
+                              onTap: () => _goToExerciseIndex(i),
+                              borderRadius: BorderRadius.circular(12),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 14, vertical: 12),
+                                decoration: BoxDecoration(
+                                  color: colorScheme.surface,
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                      color: colorScheme.outlineVariant),
+                                ),
+                                child: Row(
+                                  children: <Widget>[
+                                    Container(
+                                      width: 28,
+                                      height: 28,
+                                      decoration: BoxDecoration(
+                                        color: statusColor.withValues(
+                                            alpha: isDark ? 0.16 : 0.1),
+                                        borderRadius:
+                                            BorderRadius.circular(14),
+                                      ),
+                                      child: Icon(
+                                        passed
+                                            ? CupertinoIcons.checkmark_alt
+                                            : CupertinoIcons.xmark,
+                                        size: 15,
+                                        color: statusColor,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: <Widget>[
+                                          Text(
+                                            statusLabel,
+                                            style: TextStyle(
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w600,
+                                              color: colorScheme.onSurface,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 2),
+                                          MathContentView(
+                                            item.question,
+                                            mode: MathContentViewMode.compact,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: colorScheme
+                                                  .onSurfaceVariant,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      '查看解析',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: colorScheme.primary,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 2),
+                                    Icon(
+                                      CupertinoIcons.chevron_right,
+                                      size: 15,
+                                      color: colorScheme.onSurfaceVariant
+                                          .withValues(alpha: 0.65),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          );
+                        }),
+                      ],
+                    ],
                   ),
                 ),
+                const SizedBox(height: 12),
                 FilledButton.icon(
                   onPressed: _isGeneratingNextRound
                       ? null
@@ -617,10 +1024,13 @@ class _ExercisePracticeState extends ConsumerState<ExercisePracticeScreen> {
       await ref.read(questionRepositoryProvider).update(updated);
       invalidateQuestionList(ref);
 
-      final nextRound = latestExerciseRound(exercises);
+      final nextRound = List<GeneratedExercise>.from(
+        latestExerciseRound(exercises),
+      );
       _exerciseSourceVersion = _exerciseSourceVersionOf(
           _practiceExercises(updated, practiceContext));
       ref.read(currentQuestionProvider.notifier).state = updated;
+      _freeInputController.clear();
 
       setState(() {
         _exercises = nextRound;
@@ -666,11 +1076,24 @@ class _ExercisePracticeState extends ConsumerState<ExercisePracticeScreen> {
     return 1;
   }
 
-  List<GeneratedExercise> _nextPracticeRound(
+  bool _areLatestRoundExercisesAllAnswered(
+    List<GeneratedExercise> sourceExercises,
+  ) {
+    if (sourceExercises.isEmpty) return false;
+    final latestRound = _currentRoundIndex(sourceExercises);
+    final roundExercises = sourceExercises
+        .where((exercise) => (exercise.roundIndex ?? 1) == latestRound)
+        .toList();
+    final base = roundExercises.isNotEmpty ? roundExercises : sourceExercises;
+    return base.isNotEmpty && base.every((e) => e.isCorrect != null);
+  }
+
+  List<GeneratedExercise> _buildRoundFromSource(
     List<GeneratedExercise> sourceExercises, {
     required String questionId,
+    required bool resetAnswers,
   }) {
-    if (sourceExercises.isEmpty) return sourceExercises;
+    if (sourceExercises.isEmpty) return <GeneratedExercise>[];
 
     final latestRound = _currentRoundIndex(sourceExercises);
     final roundExercises = sourceExercises
@@ -683,8 +1106,8 @@ class _ExercisePracticeState extends ConsumerState<ExercisePracticeScreen> {
         id: '$questionId-round-$latestRound-exercise-${entry.key + 1}',
         questionId: questionId,
         order: entry.key,
-        isCorrect: null,
-        userAnswer: null,
+        isCorrect: resetAnswers ? null : source.isCorrect,
+        userAnswer: resetAnswers ? null : source.userAnswer,
         roundIndex: latestRound,
         roundTotal: base.length,
         roundGroupId: '$questionId-round-$latestRound',
@@ -755,47 +1178,164 @@ class _ExercisePracticeState extends ConsumerState<ExercisePracticeScreen> {
     }
   }
 
-  _ParsedOption _parseOption(String option) {
-    final match = RegExp(r'^\s*([A-Za-z])\s*[\.、:：\)]\s*(.*)$', dotAll: true)
-        .firstMatch(option);
+  _ParsedOption _parseOption(String raw, int optionIndex) {
+    final match = RegExp(
+      r'^\s*(?:[\(（]\s*([A-Za-z])\s*[\)）]\s*|([A-Za-z])\s*[\.、:：\)]\s*)(.*)$',
+      dotAll: true,
+    ).firstMatch(raw);
     if (match == null) {
-      final fallbackLabel = option.trim().isNotEmpty
-          ? option.trim().substring(0, 1).toUpperCase()
-          : '?';
-      return _ParsedOption(label: fallbackLabel, content: option.trim());
+      final fallbackLabel = optionIndex >= 0 && optionIndex < 26
+          ? String.fromCharCode(65 + optionIndex)
+          : '${optionIndex + 1}';
+      return _ParsedOption(label: fallbackLabel, content: raw.trim());
     }
 
+    final letter = (match.group(1) ?? match.group(2) ?? '').toUpperCase();
     return _ParsedOption(
-      label: match.group(1)!.toUpperCase(),
-      content: (match.group(2) ?? '').trim(),
+      label: letter,
+      content: (match.group(3) ?? '').trim(),
     );
   }
 
-  void _selectOption(String optionLetter) {
-    setState(() {
-      _exercises![_index] =
-          _exercises![_index].copyWith(userAnswer: optionLetter);
-    });
+  bool _isMatchingOptionAnswer({
+    required String rawAnswer,
+    required String optionLetter,
+    required String optionText,
+  }) {
+    final trimmedAnswer = rawAnswer.trim();
+    if (trimmedAnswer.isEmpty) return false;
+
+    final normalizedLetter = optionLetter.trim().toUpperCase();
+    final trimmedOptionText = optionText.trim();
+
+    final stripped = trimmedAnswer
+        .replaceFirst(RegExp(r'^(?:正确)?(?:答案|选(?:项)?)\s*[:：]?\s*'), '')
+        .trim();
+    if (stripped.isEmpty) return false;
+
+    final bracketMatch =
+        RegExp(r'^[\(（]\s*([A-Za-z])\s*[\)）]').firstMatch(stripped);
+    if (bracketMatch != null) {
+      return bracketMatch.group(1)!.toUpperCase() == normalizedLetter;
+    }
+
+    final delimitedMatch =
+        RegExp(r'^([A-Za-z])(?:\s*[\.、:：\)]|\s*$)').firstMatch(stripped);
+    if (delimitedMatch != null) {
+      return delimitedMatch.group(1)!.toUpperCase() == normalizedLetter;
+    }
+
+    final spaceMatch =
+        RegExp(r'^([A-Za-z])\s+(.+)$', dotAll: true).firstMatch(stripped);
+    if (spaceMatch != null &&
+        trimmedOptionText.isNotEmpty &&
+        spaceMatch.group(2)!.trim() == trimmedOptionText) {
+      return spaceMatch.group(1)!.toUpperCase() == normalizedLetter;
+    }
+
+    if (trimmedOptionText.isNotEmpty && stripped == trimmedOptionText) {
+      return true;
+    }
+
+    return false;
   }
 
-  void _submitAnswer(List<GeneratedExercise> exercises, int index) async {
+  bool? _gradeMcqLocally(GeneratedExercise exercise) {
+    final options = exercise.options;
+    final userAnswer = exercise.userAnswer;
+    if (options == null || options.isEmpty || userAnswer == null) {
+      return null;
+    }
+
+    var anyOptionMatchesCorrect = false;
+    var selectedOptionIsCorrect = false;
+
+    for (var i = 0; i < options.length; i++) {
+      final parsed = _parseOption(options[i], i);
+      final isCorrectOption = _isMatchingOptionAnswer(
+        rawAnswer: exercise.answer,
+        optionLetter: parsed.label,
+        optionText: parsed.content,
+      );
+      if (isCorrectOption) {
+        anyOptionMatchesCorrect = true;
+      }
+      final isSelectedOption = _isMatchingOptionAnswer(
+        rawAnswer: userAnswer,
+        optionLetter: parsed.label,
+        optionText: parsed.content,
+      );
+      if (isSelectedOption && isCorrectOption) {
+        selectedOptionIsCorrect = true;
+      }
+    }
+
+    if (!anyOptionMatchesCorrect) {
+      return null;
+    }
+    return selectedOptionIsCorrect;
+  }
+
+  void _selectOption(String optionLetter) {
+    final exercises = _exercises;
+    final current = ref.read(currentQuestionProvider);
+    if (exercises == null || current == null) return;
+    final safeIndex = _index.clamp(0, exercises.length - 1);
+
+    setState(() {
+      exercises[safeIndex] =
+          exercises[safeIndex].copyWith(userAnswer: optionLetter);
+    });
+    unawaited(_persistPracticeProgress(current, exercises));
+  }
+
+  Future<void> _submitFreeAnswer(
+    List<GeneratedExercise> exercises,
+    int index,
+  ) async {
+    await _submitAnswer(exercises, index);
+  }
+
+  Future<void> _submitAnswer(
+    List<GeneratedExercise> exercises,
+    int index,
+  ) async {
     final exercise = exercises[index];
-    if (exercise.userAnswer == null) return;
+    if (exercise.userAnswer == null || exercise.userAnswer!.trim().isEmpty) {
+      return;
+    }
 
     setState(() => _isJudging = true);
 
     final isCorrect = await _judgeAnswer(exercise);
+    if (!mounted) return;
 
     setState(() {
       exercises[index] = exercises[index].copyWith(isCorrect: isCorrect);
       _isJudging = false;
     });
+
+    final current = ref.read(currentQuestionProvider);
+    if (current != null) {
+      await _persistPracticeProgress(current, exercises);
+    }
   }
 
   Future<bool> _judgeAnswer(GeneratedExercise exercise) async {
+    final localMcq = _gradeMcqLocally(exercise);
+    if (localMcq != null) {
+      return localMcq;
+    }
+
+    final normalizedUser = (exercise.userAnswer ?? '').trim();
+    final normalizedCorrect = exercise.answer.trim();
+    final fallbackMatch = normalizedUser == normalizedCorrect ||
+        (normalizedUser.isNotEmpty &&
+            normalizedUser.toLowerCase() == normalizedCorrect.toLowerCase());
+
     final current = ref.read(currentQuestionProvider);
     if (current?.analysisResult == null) {
-      return exercise.userAnswer == exercise.answer;
+      return fallbackMatch;
     }
 
     try {
@@ -806,7 +1346,7 @@ class _ExercisePracticeState extends ConsumerState<ExercisePracticeScreen> {
           config.baseUrl.isEmpty ||
           config.apiKey.isEmpty ||
           config.model.isEmpty) {
-        return exercise.userAnswer == exercise.answer;
+        return fallbackMatch;
       }
 
       final coordinator = ref.read(aiLearningTaskCoordinatorProvider);
@@ -820,32 +1360,48 @@ class _ExercisePracticeState extends ConsumerState<ExercisePracticeScreen> {
     } catch (e) {
       debugPrint(
           '[ExercisePractice] AI judgment failed: $e, fallback to direct compare');
-      return exercise.userAnswer == exercise.answer;
+      return fallbackMatch;
     }
+  }
+
+  Future<void> _persistPracticeProgress(
+    QuestionRecord question,
+    List<GeneratedExercise> exercises,
+  ) async {
+    final practiceContext = ref.read(currentPracticeContextProvider);
+    if (practiceContext?.source == PracticeContextSource.analysis) {
+      final existing = _practiceExercises(question, practiceContext);
+      final updatedExercises = _appendCompletedRound(existing, exercises);
+      final updated = _updateAnalysisPracticeState(
+        question,
+        updatedExercises,
+        practiceContext,
+      );
+      _exerciseSourceVersion = _exerciseSourceVersionOf(
+        _practiceExercises(updated, practiceContext),
+      );
+      ref.read(currentQuestionProvider.notifier).state = updated;
+      return;
+    }
+
+    final repo = ref.read(questionRepositoryProvider);
+    final stored = await repo.getById(question.id);
+    final baseRecord = stored ?? question;
+    final existing = _practiceExercises(baseRecord, practiceContext);
+    final updatedExercises = _appendCompletedRound(existing, exercises);
+    final updated = baseRecord.copyWith(savedExercises: updatedExercises);
+    await repo.update(updated);
+    if (!mounted) return;
+    invalidateQuestionList(ref);
+    _exerciseSourceVersion = _exerciseSourceVersionOf(
+      _practiceExercises(updated, practiceContext),
+    );
+    ref.read(currentQuestionProvider.notifier).state = updated;
   }
 
   Future<void> _finishRound(
       QuestionRecord question, List<GeneratedExercise> exercises) async {
-    final practiceContext = ref.read(currentPracticeContextProvider);
-    final existing = _practiceExercises(question, practiceContext);
-    final updatedExercises = _appendCompletedRound(existing, exercises);
-    final updated = practiceContext?.source == PracticeContextSource.analysis
-        ? _updateAnalysisPracticeState(
-            question, updatedExercises, practiceContext)
-        : question.copyWith(savedExercises: updatedExercises);
-
-    if (practiceContext?.source == PracticeContextSource.analysis) {
-      _exerciseSourceVersion = _exerciseSourceVersionOf(
-          _practiceExercises(updated, practiceContext));
-      ref.read(currentQuestionProvider.notifier).state = updated;
-    } else {
-      await ref.read(questionRepositoryProvider).update(updated);
-      invalidateQuestionList(ref);
-      _exerciseSourceVersion = _exerciseSourceVersionOf(
-          _practiceExercises(updated, practiceContext));
-      ref.read(currentQuestionProvider.notifier).state = updated;
-    }
-
+    await _persistPracticeProgress(question, exercises);
     if (!mounted) return;
     setState(() => _showCompletion = true);
   }
@@ -873,6 +1429,7 @@ class _ExercisePracticeState extends ConsumerState<ExercisePracticeScreen> {
     }
 
     if (!mounted) return;
+    _freeInputController.clear();
     setState(() {
       _exercises = nextRound;
       _index = 0;
@@ -882,6 +1439,14 @@ class _ExercisePracticeState extends ConsumerState<ExercisePracticeScreen> {
 
   void _returnToQuestionDetail(QuestionRecord question, String fallbackRoute) {
     ref.read(currentPracticeContextProvider.notifier).state = null;
+    ref.read(activeReviewSessionProvider.notifier).state = null;
+    ref.read(questionDetailModeProvider.notifier).state =
+        QuestionDetailMode.browse;
+    final existingDetailReturn = ref.read(questionDetailReturnRouteProvider);
+    if (existingDetailReturn.isEmpty ||
+        existingDetailReturn.startsWith('/notebook/question/')) {
+      ref.read(questionDetailReturnRouteProvider.notifier).state = '/notebook';
+    }
     context.go(fallbackRoute == '/notebook'
         ? '/notebook/question/${question.id}'
         : fallbackRoute);
@@ -891,10 +1456,18 @@ class _ExercisePracticeState extends ConsumerState<ExercisePracticeScreen> {
     final practiceContext = ref.read(currentPracticeContextProvider);
     if (practiceContext?.source != PracticeContextSource.analysis) {
       ref.read(currentPracticeContextProvider.notifier).state = null;
+      ref.read(activeReviewSessionProvider.notifier).state = null;
+      ref.read(questionDetailModeProvider.notifier).state =
+          QuestionDetailMode.browse;
+      ref.read(questionDetailReturnRouteProvider.notifier).state = '/notebook';
       if (!mounted) return;
       context.go('/notebook/question/${question.id}');
       return;
     }
+
+    final captureReturn = ref.read(captureReturnRouteProvider);
+    final detailReturnRoute =
+        captureReturn.isNotEmpty ? captureReturn : '/notebook';
 
     if (!isMultiQuestionAnalysisResult(question)) {
       final saved = await autoSaveSingleQuestion(
@@ -908,6 +1481,12 @@ class _ExercisePracticeState extends ConsumerState<ExercisePracticeScreen> {
       } catch (_) {}
       invalidateQuestionList(ref);
       ref.invalidate(scanTaskCountProvider);
+      ref.read(currentPracticeContextProvider.notifier).state = null;
+      ref.read(activeReviewSessionProvider.notifier).state = null;
+      ref.read(questionDetailModeProvider.notifier).state =
+          QuestionDetailMode.capture;
+      ref.read(questionDetailReturnRouteProvider.notifier).state =
+          detailReturnRoute;
       ref.read(currentQuestionProvider.notifier).state = saved;
       if (!mounted) return;
       context.go('/notebook/question/${saved.id}');
@@ -918,6 +1497,12 @@ class _ExercisePracticeState extends ConsumerState<ExercisePracticeScreen> {
     final session =
         await buildQuestionSplitSession(question, splitter: splitter);
     final selectedOrder = practiceContext?.candidateOrder;
+    ref.read(currentPracticeContextProvider.notifier).state = null;
+    ref.read(activeReviewSessionProvider.notifier).state = null;
+    ref.read(questionDetailModeProvider.notifier).state =
+        QuestionDetailMode.capture;
+    ref.read(questionDetailReturnRouteProvider.notifier).state =
+        detailReturnRoute;
     ref.read(currentQuestionSplitSessionProvider.notifier).state =
         selectedOrder == null
             ? session

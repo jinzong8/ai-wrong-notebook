@@ -141,9 +141,9 @@ class _FakeLearningTaskCoordinator implements AiLearningTaskCoordinator {
   }
 }
 
-GoRouter _practiceRouter() {
+GoRouter _practiceRouter({String initialLocation = '/exercise/practice'}) {
   return GoRouter(
-    initialLocation: '/exercise/practice',
+    initialLocation: initialLocation,
     routes: <RouteBase>[
       GoRoute(
         path: '/exercise/practice',
@@ -458,6 +458,226 @@ void main() {
     expect(find.byType(CustomPaint), findsAtLeastNWidgets(1));
   });
 
-  // testWidgets('shows answer after marking correct', (tester) async { ... });
-  // testWidgets('persists isCorrect to repository on finish', (tester) async { ... });
+  testWidgets(
+      'assigns A/B/C/D labels to unlabelled numeric options and grades B. 12 / lowercase b accurately',
+      (tester) async {
+    final now = DateTime.now();
+    final repo = InMemoryQuestionRepository();
+    final question = _makeQuestion(
+      exercises: <GeneratedExercise>[
+        GeneratedExercise(
+          id: 'num-1',
+          questionId: 'q-1',
+          generationMode: ExerciseGenerationMode.practice,
+          difficulty: '简单',
+          question: '6 + 6 = ?',
+          options: const <String>['10', '12', '15', '20'],
+          answer: 'B. 12',
+          explanation: '6 加 6 等于 12',
+          createdAt: now,
+          order: 0,
+        ),
+        GeneratedExercise(
+          id: 'num-2',
+          questionId: 'q-1',
+          generationMode: ExerciseGenerationMode.practice,
+          difficulty: '中等',
+          question: '3 * 5 = ?',
+          options: const <String>['10', '12', '15', '20'],
+          answer: 'c',
+          explanation: '3 乘 5 等于 15',
+          createdAt: now,
+          order: 1,
+        ),
+      ],
+    );
+    await repo.saveDraft(question);
+
+    await tester.pumpWidget(_buildApp(question, repo));
+    await tester.pumpAndSettle();
+
+    // Distinct A/B/C/D badges instead of duplicate '1' labels
+    expect(find.text('A'), findsOneWidget);
+    expect(find.text('B'), findsOneWidget);
+    expect(find.text('C'), findsOneWidget);
+    expect(find.text('D'), findsOneWidget);
+    expect(find.text('1'), findsNothing);
+
+    await tester.tap(find.text('B'));
+    await tester.pump();
+    await tester.tap(find.text('提交答案'));
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(
+      find.text('回答正确'),
+      160,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text('回答正确'), findsOneWidget);
+
+    await tester.tap(find.text('下一题'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('C'));
+    await tester.pump();
+    await tester.tap(find.text('提交答案'));
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(
+      find.text('回答正确'),
+      160,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text('回答正确'), findsOneWidget);
+  });
+
+  testWidgets('keeps free-input user answer visible after submission',
+      (tester) async {
+    final now = DateTime.now();
+    final repo = InMemoryQuestionRepository();
+    final question = _makeQuestion(
+      exercises: <GeneratedExercise>[
+        GeneratedExercise(
+          id: 'free-1',
+          questionId: 'q-1',
+          generationMode: ExerciseGenerationMode.practice,
+          difficulty: '简单',
+          question: '解方程 x + 3 = 8',
+          answer: 'x=5',
+          explanation: '移项得 x = 8 - 3 = 5',
+          createdAt: now,
+          order: 0,
+        ),
+      ],
+    );
+    await repo.saveDraft(question);
+
+    await tester.pumpWidget(_buildApp(question, repo));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField), 'x=4');
+    await tester.pump();
+    await tester.tap(find.text('提交答案'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('你的作答'), findsOneWidget);
+    expect(find.text('x=4'), findsOneWidget);
+    expect(find.text('回答错误'), findsOneWidget);
+    expect(find.text('正确答案：x=5'), findsOneWidget);
+  });
+
+  testWidgets(
+      'persists partial mid-round progress and supports completion list & ?review=1 explanation browsing',
+      (tester) async {
+    final now = DateTime.now();
+    final repo = InMemoryQuestionRepository();
+    final question = _makeQuestion(
+      exercises: <GeneratedExercise>[
+        GeneratedExercise(
+          id: 'r-1',
+          questionId: 'q-1',
+          generationMode: ExerciseGenerationMode.practice,
+          difficulty: '简单',
+          question: '第一道练习题',
+          options: const <String>['A. 1', 'B. 2'],
+          answer: 'B',
+          explanation: '第一题详细解析',
+          createdAt: now,
+          order: 0,
+        ),
+        GeneratedExercise(
+          id: 'r-2',
+          questionId: 'q-1',
+          generationMode: ExerciseGenerationMode.practice,
+          difficulty: '中等',
+          question: '第二道练习题',
+          options: const <String>['A. 3', 'B. 4'],
+          answer: 'B',
+          explanation: '第二题详细解析',
+          createdAt: now,
+          order: 1,
+        ),
+      ],
+    );
+    await repo.saveDraft(question);
+
+    final container = ProviderContainer(
+      overrides: <Override>[
+        questionRepositoryProvider.overrideWithValue(repo),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    container.read(currentQuestionProvider.notifier).state = question;
+    container.read(questionDetailModeProvider.notifier).state =
+        QuestionDetailMode.review;
+    container.read(activeReviewSessionProvider.notifier).state =
+        const ReviewSessionState(queueIds: <String>['q-1'], currentIndex: 0);
+
+    final router = _practiceRouter();
+    addTearDown(router.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Answer Question 1 of 2 -> persisted immediately before finishing round!
+    await tester.tap(find.text('B'));
+    await tester.pump();
+    await tester.tap(find.text('提交答案'));
+    await tester.pumpAndSettle();
+
+    final midSaved = await repo.getById('q-1');
+    expect(midSaved!.savedExercises.first.isCorrect, isTrue);
+    expect(midSaved.savedExercises.last.isCorrect, isNull);
+
+    // Finish Question 2 (intentionally wrong) -> completion summary lists rows
+    await tester.tap(find.text('下一题'));
+    await tester.pumpAndSettle();
+    expect(find.text('上一题'), findsOneWidget);
+
+    await tester.tap(find.text('A'));
+    await tester.pump();
+    await tester.tap(find.text('提交答案'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('完成练习'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('第 1 题 · 答对'), findsOneWidget);
+    expect(find.text('第 2 题 · 答错'), findsOneWidget);
+
+    // Tap '第 2 题 · 答错' row to jump back and inspect explanation
+    await tester.tap(find.text('第 2 题 · 答错'));
+    await tester.pumpAndSettle();
+    expect(find.text('第二题详细解析'), findsOneWidget);
+
+    // Step back to Question 1 via '上一题'
+    await tester.tap(find.text('上一题'));
+    await tester.pumpAndSettle();
+    expect(find.text('第一题详细解析'), findsOneWidget);
+
+    // Jump back to completion and return to detail -> clears review mode leak
+    await tester.tap(find.text('第 2 题'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('完成练习'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('返回错题详情'));
+    await tester.pumpAndSettle();
+
+    expect(
+        container.read(questionDetailModeProvider), QuestionDetailMode.browse);
+    expect(container.read(activeReviewSessionProvider), isNull);
+
+    // Re-open completed round with ?review=1 -> starts on Question 1 directly!
+    router.go('/exercise/practice?review=1');
+    await tester.pumpAndSettle();
+
+    expect(find.text('举一反三 1/2'), findsOneWidget);
+    expect(find.text('第一道练习题'), findsOneWidget);
+    expect(find.text('第一题详细解析'), findsOneWidget);
+  });
 }

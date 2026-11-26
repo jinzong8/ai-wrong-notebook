@@ -31,6 +31,7 @@ class _AnalysisLoadingScreenState extends ConsumerState<AnalysisLoadingScreen> {
   String? _debugInfo;
   bool _showDebugInfo = false;
   int _step = 0;
+  int _elapsedSeconds = 0;
   String? _progressText;
   bool _canContinueInBackground = false;
   Timer? _stepTimer;
@@ -57,16 +58,17 @@ class _AnalysisLoadingScreenState extends ConsumerState<AnalysisLoadingScreen> {
 
   void _animateSteps() {
     _stepTimer?.cancel();
-    _stepTimer = Timer.periodic(const Duration(seconds: 2), (timer) {
+    _stepTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (!mounted) {
         timer.cancel();
         return;
       }
-      if (_step < _steps.length - 1) {
-        setState(() => _step++);
-      } else {
-        timer.cancel();
-      }
+      setState(() {
+        _elapsedSeconds++;
+        if (_elapsedSeconds.isEven && _step < _steps.length - 1) {
+          _step++;
+        }
+      });
     });
   }
 
@@ -119,7 +121,6 @@ class _AnalysisLoadingScreenState extends ConsumerState<AnalysisLoadingScreen> {
           onProgress: (completed, total, {int failed = 0}) {
             if (!mounted) return;
             setState(() {
-              _stepTimer?.cancel();
               if (completed == 0) {
                 _progressText = '正在依次分析 $total 道题...';
                 return;
@@ -181,6 +182,7 @@ class _AnalysisLoadingScreenState extends ConsumerState<AnalysisLoadingScreen> {
       ref.read(currentQuestionProvider.notifier).state = updated;
       context.go('/analysis/result');
     } on AiAnalysisException catch (e) {
+      _stepTimer?.cancel();
       if (mounted) {
         setState(() {
           _errorMessage = e.toString();
@@ -188,6 +190,7 @@ class _AnalysisLoadingScreenState extends ConsumerState<AnalysisLoadingScreen> {
         });
       }
     } catch (e) {
+      _stepTimer?.cancel();
       if (mounted) {
         setState(() {
           _errorMessage = '解析失败：$e';
@@ -197,9 +200,22 @@ class _AnalysisLoadingScreenState extends ConsumerState<AnalysisLoadingScreen> {
     }
   }
 
-  void _handleBack() {
+  Future<void> _handleBack() async {
+    _stepTimer?.cancel();
     final current = ref.read(currentQuestionProvider);
     if (widget.isReanalysis && current != null) {
+      try {
+        await ref.read(scanTaskLifecycleServiceProvider).prepareRetry(current);
+        ref.invalidate(scanTaskCountProvider);
+      } catch (_) {}
+      try {
+        final saved =
+            await ref.read(questionRepositoryProvider).getById(current.id);
+        if (saved != null) {
+          ref.read(currentQuestionProvider.notifier).state = saved;
+        }
+      } catch (_) {}
+      if (!mounted) return;
       context.go('/notebook/question/${current.id}');
       return;
     }
@@ -224,20 +240,23 @@ class _AnalysisLoadingScreenState extends ConsumerState<AnalysisLoadingScreen> {
             ? _buildErrorView(context, p)
             : _LoadingView(
                 step: _step,
+                elapsedSeconds: _elapsedSeconds,
                 steps: _steps,
                 stageLabels: _stageLabels,
                 isReanalysis: widget.isReanalysis,
                 progressText: _progressText,
-                onCaptureNextInBackground: _canContinueInBackground
-                    ? () => openCameraCaptureFlow(
-                          context,
-                          ref,
-                          returnRoute: ref.read(captureReturnRouteProvider),
-                        )
-                    : null,
-                onBackHomeInBackground: _canContinueInBackground
-                    ? () => context.go(ref.read(captureReturnRouteProvider))
-                    : null,
+                onCaptureNextInBackground:
+                    (!widget.isReanalysis && _canContinueInBackground)
+                        ? () => openCameraCaptureFlow(
+                              context,
+                              ref,
+                              returnRoute: ref.read(captureReturnRouteProvider),
+                            )
+                        : null,
+                onBackHomeInBackground:
+                    (!widget.isReanalysis && _canContinueInBackground)
+                        ? () => context.go(ref.read(captureReturnRouteProvider))
+                        : null,
               ),
       ),
     );
@@ -296,6 +315,7 @@ class _AnalysisLoadingScreenState extends ConsumerState<AnalysisLoadingScreen> {
                     _errorMessage = null;
                     _progressText = null;
                     _step = 0;
+                    _elapsedSeconds = 0;
                     _canContinueInBackground = false;
                   });
                   _runAnalysis();
@@ -351,6 +371,7 @@ class _AnalysisLoadingScreenState extends ConsumerState<AnalysisLoadingScreen> {
 class _LoadingView extends StatefulWidget {
   const _LoadingView({
     required this.step,
+    required this.elapsedSeconds,
     required this.steps,
     required this.stageLabels,
     required this.isReanalysis,
@@ -360,6 +381,7 @@ class _LoadingView extends StatefulWidget {
   });
 
   final int step;
+  final int elapsedSeconds;
   final List<String> steps;
   final List<String> stageLabels;
   final bool isReanalysis;
@@ -471,6 +493,19 @@ class _LoadingViewState extends State<_LoadingView>
                       color: p.inkSecondary,
                     ),
                   ),
+                  if (widget.elapsedSeconds >= 6) ...<Widget>[
+                    const SizedBox(height: 6),
+                    Text(
+                      '已等待 ${widget.elapsedSeconds} 秒，复杂图文题可能需要 15~30 秒',
+                      key: const Key('loading-elapsed-hint'),
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 12,
+                        height: 1.4,
+                        color: p.inkMuted,
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 22),
                   ClipRRect(
                     borderRadius: BorderRadius.circular(999),

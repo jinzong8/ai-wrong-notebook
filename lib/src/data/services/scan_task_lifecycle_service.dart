@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:smart_wrong_notebook/src/data/repositories/question_repository.dart';
+import 'package:smart_wrong_notebook/src/domain/models/ai_task_spec.dart';
 import 'package:smart_wrong_notebook/src/domain/models/analysis_job.dart';
 import 'package:smart_wrong_notebook/src/domain/models/question_record.dart';
 import 'package:smart_wrong_notebook/src/domain/repositories/analysis_job_repository.dart';
@@ -13,12 +14,22 @@ class ScanTaskLifecycleService {
   })  : _analysisJobs = analysisJobs,
         _questions = questions;
 
+  static const Set<AiTaskType> _scanTaskTypes = <AiTaskType>{
+    AiTaskType.extraction,
+    AiTaskType.firstPassAnalysis,
+    AiTaskType.candidateAnalysisRetry,
+  };
+
   final AnalysisJobRepository? _analysisJobs;
   final QuestionRepository _questions;
 
   Future<int> countTasks() async {
     final jobs = await _analysisJobs?.listAll() ?? const <AnalysisJob>[];
-    return jobs.map((job) => job.taskSpec.parentQuestionId).toSet().length;
+    return jobs
+        .where((job) => _scanTaskTypes.contains(job.taskSpec.type))
+        .map((job) => job.taskSpec.parentQuestionId)
+        .toSet()
+        .length;
   }
 
   Future<void> completeSaved(String sourceQuestionId) async {

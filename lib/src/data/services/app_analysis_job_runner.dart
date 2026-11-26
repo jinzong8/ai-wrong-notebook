@@ -34,22 +34,22 @@ class AppAnalysisJobRunner implements AnalysisJobRunner {
           await context.reportProgress(const AnalysisJobProgress(
             stage: AnalysisJobProgressStage.recognizing,
           ));
-          return _runExtraction(payload);
+          return await _runExtraction(payload);
         case AiTaskType.independentQuestionSplit:
-          return _runIndependentQuestionSplit(payload);
+          return await _runIndependentQuestionSplit(payload);
         case AiTaskType.firstPassAnalysis:
           await context.reportProgress(const AnalysisJobProgress(
             stage: AnalysisJobProgressStage.analyzing,
           ));
-          return _runFirstPass(payload, context);
+          return await _runFirstPass(payload, context);
         case AiTaskType.candidateAnalysisRetry:
-          return _runCandidateAnalysisRetry(payload, context);
+          return await _runCandidateAnalysisRetry(payload, context);
         case AiTaskType.followUp:
-          return _runFollowUp(payload);
+          return await _runFollowUp(payload);
         case AiTaskType.exerciseGeneration:
-          return _runExerciseGeneration(payload);
+          return await _runExerciseGeneration(payload);
         case AiTaskType.answerJudgement:
-          return _runAnswerJudgement(payload);
+          return await _runAnswerJudgement(payload);
         case AiTaskType.deepAnalysis:
         case AiTaskType.verification:
           throw const AnalysisJobExecutionException(
@@ -138,6 +138,12 @@ class AppAnalysisJobRunner implements AnalysisJobRunner {
     ));
     if (!isMultiQuestionAnalysisResult(updated) &&
         _questionRepository != null) {
+      if (_analysisJobRepository != null) {
+        final liveJob = await _analysisJobRepository.getById(context.job.id);
+        if (liveJob == null || liveJob.status == AnalysisJobStatus.cancelled) {
+          return jsonEncode(updated.toJson());
+        }
+      }
       final saved = await autoSaveSingleQuestion(
         analyzed: updated,
         repository: _questionRepository,

@@ -209,19 +209,42 @@ class DataManagementScreen extends ConsumerWidget {
           .pickFiles(type: FileType.custom, allowedExtensions: ['json']);
       if (result == null || result.files.isEmpty) return;
 
-      final file = File(result.files.first.path!);
+      final pickedPath = result.files.first.path;
+      if (pickedPath == null || pickedPath.isEmpty) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('无法读取所选文件路径')),
+          );
+        }
+        return;
+      }
+
+      final file = File(pickedPath);
       final content = await file.readAsString();
-      final list = jsonDecode(content) as List;
+      final decoded = jsonDecode(content);
+      if (decoded is! List) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('所选文件不是题库备份格式')),
+          );
+        }
+        return;
+      }
+
       final repo = ref.read(questionRepositoryProvider);
       int imported = 0;
 
-      for (final item in list) {
-        final map = item as Map<String, dynamic>;
-        final record = _jsonToQuestion(map);
-        if (record != null) {
-          await repo.saveDraft(record);
-          imported++;
+      for (final item in decoded) {
+        if (item is! Map) continue;
+        final record = _jsonToQuestion(Map<String, dynamic>.from(item));
+        if (record == null) continue;
+        final hasText = record.normalizedQuestionText.trim().isNotEmpty ||
+            record.extractedQuestionText.trim().isNotEmpty;
+        if (record.id.trim().isEmpty || !hasText) {
+          continue;
         }
+        await repo.saveDraft(record);
+        imported++;
       }
 
       invalidateQuestionList(ref);
@@ -251,8 +274,9 @@ class DataManagementScreen extends ConsumerWidget {
       BuildContext context, WidgetRef ref, int questionCount) async {
     final taskCount =
         await ref.read(scanTaskLifecycleServiceProvider).countTasks();
+    final reviewLogs = await ref.read(reviewLogRepositoryProvider).listAll();
     if (!context.mounted) return;
-    if (questionCount == 0 && taskCount == 0) {
+    if (questionCount == 0 && taskCount == 0 && reviewLogs.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('没有可清空的数据')),
       );
@@ -262,8 +286,19 @@ class DataManagementScreen extends ConsumerWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('确认清空'),
-        content: Text(
-          '确定要删除 $questionCount 道错题和 $taskCount 条扫题记录吗？此操作不可恢复。',
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text(
+              '确定要删除 $questionCount 道错题和 $taskCount 条扫题记录吗？此操作不可恢复。',
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '错题、复习记录与对话记录将被清空。',
+              style: _subtitleStyle(ctx),
+            ),
+          ],
         ),
         actions: <Widget>[
           TextButton(
@@ -294,13 +329,29 @@ class DataManagementScreen extends ConsumerWidget {
     await ref.read(reviewLogRepositoryProvider).clear();
     invalidateQuestionList(ref);
     ref.invalidate(scanTaskCountProvider);
+    ref.invalidate(failedAnalysisTaskCountProvider);
     ref.read(currentQuestionProvider.notifier).state = null;
     ref.read(currentQuestionSplitSessionProvider.notifier).state = null;
 
     try {
       for (final q in all) {
+        if (q.imagePath.isEmpty) continue;
         final file = File(q.imagePath);
         if (await file.exists()) await file.delete();
+      }
+    } catch (_) {}
+
+    try {
+      final appDocDir = await getApplicationDocumentsDirectory();
+      final imagesDir = Directory('${appDocDir.path}/wrong_question_images');
+      if (await imagesDir.exists()) {
+        await for (final entity in imagesDir.list()) {
+          if (entity is File) {
+            try {
+              await entity.delete();
+            } catch (_) {}
+          }
+        }
       }
     } catch (_) {}
 

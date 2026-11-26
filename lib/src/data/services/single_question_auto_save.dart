@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:smart_wrong_notebook/src/data/repositories/question_repository.dart';
 import 'package:smart_wrong_notebook/src/domain/models/content_status.dart';
 import 'package:smart_wrong_notebook/src/domain/models/question_record.dart';
@@ -77,16 +79,38 @@ QuestionRecord prepareSingleQuestionForSave(
 }
 
 /// Idempotently saves (or updates in-place) a single analyzed question directly
-/// into [repository].
+/// into [repository]. When replacing an existing question's image in place,
+/// removes the superseded image file if no other saved question references it.
 Future<QuestionRecord> autoSaveSingleQuestion({
   required QuestionRecord analyzed,
   required QuestionRepository repository,
 }) async {
   final existing = await repository.getById(analyzed.id);
+  final previousImagePath = existing?.imagePath.trim() ?? '';
   final prepared = prepareSingleQuestionForSave(
     analyzed,
     existingSaved: existing,
   );
   await repository.saveDraft(prepared);
+
+  if (existing != null &&
+      previousImagePath.isNotEmpty &&
+      previousImagePath != prepared.imagePath.trim()) {
+    try {
+      final all = await repository.listAll();
+      final stillReferenced = all.any(
+        (item) => item.id != prepared.id && item.imagePath == previousImagePath,
+      );
+      if (!stillReferenced) {
+        final oldFile = File(previousImagePath);
+        if (await oldFile.exists()) {
+          await oldFile.delete();
+        }
+      }
+    } catch (_) {
+      // Never fail saving if old image cleanup cannot remove the file.
+    }
+  }
+
   return prepared;
 }

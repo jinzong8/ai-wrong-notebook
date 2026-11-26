@@ -10,24 +10,59 @@ import 'package:smart_wrong_notebook/src/domain/models/mastery_level.dart';
 import 'package:smart_wrong_notebook/src/domain/models/question_record.dart';
 import 'package:smart_wrong_notebook/src/features/capture/presentation/camera_capture_crop_screen.dart';
 import 'package:smart_wrong_notebook/src/features/home/presentation/background_analysis_section.dart';
+import 'package:smart_wrong_notebook/src/shared/utils/local_date_utils.dart';
 import 'package:smart_wrong_notebook/src/shared/widgets/math_content_view.dart';
 
-class HomeScreen extends ConsumerWidget {
-  const HomeScreen({super.key});
+class HomeScreen extends ConsumerStatefulWidget {
+  const HomeScreen({super.key, this.clock});
+
+  /// Optional clock override for deterministic cross-day testing.
+  final DateTime Function()? clock;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends ConsumerState<HomeScreen>
+    with WidgetsBindingObserver {
+  late DateTime _activeDay;
+
+  DateTime _now() => (widget.clock ?? DateTime.now)();
+
+  @override
+  void initState() {
+    super.initState();
+    _activeDay = _now();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    final now = _now();
+    if (!isSameLocalCalendarDay(_activeDay, now)) {
+      setState(() => _activeDay = now);
+      invalidateQuestionList(ref);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final p = EditorialPalette.of(context);
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final questionsAsync = ref.watch(questionListProvider);
     final dueAsync = ref.watch(dueReviewProvider);
     final analysisTasksAsync = ref.watch(backgroundAnalysisTasksProvider);
-    final now = DateTime.now();
+    final now = _now();
+    _activeDay = now;
     final todayNewCount = questionsAsync.valueOrNull
-            ?.where((q) =>
-                q.createdAt.year == now.year &&
-                q.createdAt.month == now.month &&
-                q.createdAt.day == now.day)
+            ?.where((q) => isSameLocalCalendarDay(q.createdAt, now))
             .length ??
         0;
 
@@ -268,13 +303,10 @@ class HomeScreen extends ConsumerWidget {
     final mastered =
         questions.where((q) => q.masteryLevel == MasteryLevel.mastered).length;
     final pending = total - mastered;
-    final now = DateTime.now();
-    final todayNew = questions.where((q) {
-      final createdAt = q.createdAt;
-      return createdAt.year == now.year &&
-          createdAt.month == now.month &&
-          createdAt.day == now.day;
-    }).length;
+    final now = _now();
+    final todayNew = questions
+        .where((q) => isSameLocalCalendarDay(q.createdAt, now))
+        .length;
     final progress = total == 0 ? 0.0 : mastered / total;
     final percent = (progress * 100).round();
 

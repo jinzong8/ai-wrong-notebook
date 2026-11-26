@@ -7,6 +7,7 @@ import 'package:smart_wrong_notebook/src/common/widgets/app_back_scope.dart';
 import 'package:smart_wrong_notebook/src/domain/models/mastery_level.dart';
 import 'package:smart_wrong_notebook/src/domain/models/question_record.dart';
 import 'package:smart_wrong_notebook/src/domain/models/review_log.dart';
+import 'package:smart_wrong_notebook/src/shared/utils/local_date_utils.dart';
 import 'package:smart_wrong_notebook/src/shared/widgets/math_content_view.dart';
 
 class ReviewHistoryScreen extends ConsumerWidget {
@@ -102,12 +103,13 @@ class ReviewHistoryScreen extends ConsumerWidget {
         ),
         onTap: entry.question != null
             ? () {
-                ref.read(currentQuestionProvider.notifier).state =
-                    entry.question;
+                ref.read(activeReviewSessionProvider.notifier).state = null;
                 ref.read(questionDetailReturnRouteProvider.notifier).state =
                     '/review/history';
                 ref.read(questionDetailModeProvider.notifier).state =
                     QuestionDetailMode.browse;
+                ref.read(currentQuestionProvider.notifier).state =
+                    entry.question;
                 context.go('/notebook/question/${entry.question!.id}');
               }
             : null,
@@ -139,15 +141,7 @@ class ReviewHistoryScreen extends ConsumerWidget {
     }
   }
 
-  String _formatDate(DateTime dt) {
-    final now = DateTime.now();
-    final diff = now.difference(dt);
-    if (diff.inDays == 0) {
-      return '今天 ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
-    }
-    if (diff.inDays == 1) return '昨天';
-    return '${dt.month}/${dt.day}';
-  }
+  String _formatDate(DateTime dt) => formatRelativeLocalDate(dt);
 }
 
 class _EmptyHistoryCard extends StatelessWidget {
@@ -169,7 +163,7 @@ class _EmptyHistoryCard extends StatelessWidget {
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500)),
             const SizedBox(height: 8),
             Text(
-              '开始复习后在首页查看历史',
+              '完成错题复习打卡后将在此显示历史记录',
               style:
                   TextStyle(fontSize: 12, color: colorScheme.onSurfaceVariant),
             ),
@@ -188,15 +182,12 @@ class _ReviewEntry {
 
 final FutureProvider<List<_ReviewEntry>> _reviewLogsWithQuestionsProvider =
     FutureProvider<List<_ReviewEntry>>((ref) async {
-  final logRepo = ref.watch(reviewLogRepositoryProvider);
-  final questionRepo = ref.watch(questionRepositoryProvider);
-  final logs = [...await logRepo.listAll()];
-  final questions = await questionRepo.listAll();
-  final questionMap = <String, QuestionRecord>{};
-  for (final q in questions) {
-    questionMap[q.id] = q;
-  }
-  logs.sort((a, b) => b.reviewedAt.compareTo(a.reviewedAt));
+  final logs = [...await ref.watch(reviewLogListProvider.future)]
+    ..sort((a, b) => b.reviewedAt.compareTo(a.reviewedAt));
+  final questions = await ref.watch(questionListProvider.future);
+  final questionMap = <String, QuestionRecord>{
+    for (final q in questions) q.id: q,
+  };
   return logs
       .map((log) =>
           _ReviewEntry(log: log, question: questionMap[log.questionRecordId]))

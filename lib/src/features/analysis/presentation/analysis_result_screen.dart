@@ -13,6 +13,7 @@ import 'package:smart_wrong_notebook/src/domain/models/analysis_result.dart';
 import 'package:smart_wrong_notebook/src/domain/models/mastery_level.dart';
 import 'package:smart_wrong_notebook/src/domain/models/question_record.dart';
 import 'package:smart_wrong_notebook/src/domain/models/question_split_result.dart';
+import 'package:smart_wrong_notebook/src/features/capture/presentation/camera_capture_crop_screen.dart';
 import 'package:smart_wrong_notebook/src/shared/widgets/math_content_view.dart';
 
 class AnalysisResultScreen extends ConsumerStatefulWidget {
@@ -48,7 +49,7 @@ class _AnalysisResultScreenState extends ConsumerState<AnalysisResultScreen> {
             title: const Text('AI 解析结果'),
             leading: IconButton(
               icon: const Icon(CupertinoIcons.chevron_left),
-              onPressed: () => context.go('/analysis/loading'),
+              onPressed: () => context.go('/'),
             ),
           ),
           body: const Center(child: Text('未找到错题记录')),
@@ -84,6 +85,9 @@ class _AnalysisResultScreenState extends ConsumerState<AnalysisResultScreen> {
     final hasRetryingCandidate = record.candidateAnalyses.any((candidate) =>
         candidate.status == CandidateAnalysisStatus.queued ||
         candidate.status == CandidateAnalysisStatus.running);
+    final canSaveAny = hasMultipleCandidates
+        ? record.candidateAnalyses.any((c) => c.isSuccessful)
+        : displayResult != null;
     final candidateInsight = hasMultipleCandidates
         ? _candidateInsight(
             candidateOrder: activeCandidate?.order ?? 1,
@@ -106,6 +110,43 @@ class _AnalysisResultScreenState extends ConsumerState<AnalysisResultScreen> {
             icon: const Icon(CupertinoIcons.chevron_left),
             onPressed: () => context.go('/'),
           ),
+          actions: <Widget>[
+            PopupMenuButton<String>(
+              key: const Key('analysis-more-menu'),
+              enabled: !_savingSingle,
+              onSelected: (value) {
+                if (value == 'retake') {
+                  _openRetakeCapture(context, record);
+                } else if (value == 'edit_text') {
+                  ref.read(currentQuestionProvider.notifier).state = record;
+                  context.go('/analysis/text-correction');
+                }
+              },
+              itemBuilder: (_) => <PopupMenuEntry<String>>[
+                PopupMenuItem<String>(
+                  value: 'retake',
+                  child: Row(
+                    children: <Widget>[
+                      Icon(CupertinoIcons.camera, color: p.cobalt, size: 18),
+                      const SizedBox(width: 8),
+                      const Text('重新拍照'),
+                    ],
+                  ),
+                ),
+                if (!hasMultipleCandidates)
+                  PopupMenuItem<String>(
+                    value: 'edit_text',
+                    child: Row(
+                      children: <Widget>[
+                        Icon(CupertinoIcons.pencil, color: p.cobalt, size: 18),
+                        const SizedBox(width: 8),
+                        const Text('修改题干'),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ],
         ),
         body: ListView(
           padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
@@ -347,24 +388,57 @@ class _AnalysisResultScreenState extends ConsumerState<AnalysisResultScreen> {
                         notice: _consistencyNotice(displayResult, p)!,
                       ),
                     ],
-                    if (_shouldOfferQuestionCorrection(
-                      displayResult,
-                      hasMultipleCandidates: hasMultipleCandidates,
-                    )) ...<Widget>[
+                    if (_shouldOfferRetakeOrCorrection(displayResult)) ...<Widget>[
                       const SizedBox(height: 12),
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: OutlinedButton.icon(
-                          onPressed: () =>
-                              context.go('/analysis/text-correction'),
-                          icon: const Icon(CupertinoIcons.pencil, size: 16),
-                          label: const Text('核对题干后重新解析'),
-                        ),
+                      Row(
+                        children: <Widget>[
+                          Expanded(
+                            child: FilledButton.tonalIcon(
+                              key: const Key('analysis-retake-button'),
+                              onPressed: () =>
+                                  _openRetakeCapture(context, record),
+                              icon: const Icon(CupertinoIcons.camera, size: 16),
+                              label: const Text('重新拍照'),
+                              style: FilledButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 10,
+                                ),
+                              ),
+                            ),
+                          ),
+                          if (_shouldOfferQuestionCorrection(
+                            displayResult,
+                            hasMultipleCandidates: hasMultipleCandidates,
+                          )) ...<Widget>[
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                key: const Key('analysis-edit-text-button'),
+                                onPressed: () =>
+                                    context.go('/analysis/text-correction'),
+                                icon:
+                                    const Icon(CupertinoIcons.pencil, size: 16),
+                                label: const Text('修改题干'),
+                                style: OutlinedButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 10,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
                       ),
                     ],
                   ],
                 ),
               ),
+              if (displayResult.steps.isNotEmpty) ...<Widget>[
+                const SizedBox(height: 12),
+                EditorialStepTimeline(steps: displayResult.steps),
+              ],
               const SizedBox(height: 12),
               // 错因分析
               EditorialCard(
@@ -484,14 +558,12 @@ class _AnalysisResultScreenState extends ConsumerState<AnalysisResultScreen> {
                   ),
                 ),
               ],
-              if (displayResult.steps.isNotEmpty) ...<Widget>[
-                const SizedBox(height: 12),
-                EditorialStepTimeline(steps: displayResult.steps),
-              ],
-              const SizedBox(height: 20),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: <Widget>[
+            ],
+            const SizedBox(height: 20),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                if (canSaveAny) ...<Widget>[
                   FilledButton.icon(
                     onPressed: hasRetryingCandidate || _savingSingle
                         ? null
@@ -520,15 +592,15 @@ class _AnalysisResultScreenState extends ConsumerState<AnalysisResultScreen> {
                     ),
                   ),
                   const SizedBox(height: 10),
-                  OutlinedButton.icon(
-                    onPressed:
-                        _savingSingle ? null : () => _discardResult(record),
-                    icon: const Icon(CupertinoIcons.delete, size: 17),
-                    label: const Text('放弃本次结果'),
-                  ),
                 ],
-              ),
-            ],
+                OutlinedButton.icon(
+                  onPressed:
+                      _savingSingle ? null : () => _discardResult(record),
+                  icon: const Icon(CupertinoIcons.delete, size: 17),
+                  label: const Text('放弃本次结果'),
+                ),
+              ],
+            ),
           ],
         ),
       ),
@@ -740,14 +812,35 @@ class _AnalysisResultScreenState extends ConsumerState<AnalysisResultScreen> {
     );
   }
 
+  bool _shouldOfferRetakeOrCorrection(AnalysisResult result) {
+    return result.visualAssumptionStatus ==
+            VisualAssumptionStatus.needsReview ||
+        result.consistencyStatus == AnalysisConsistencyStatus.needsReview;
+  }
+
   bool _shouldOfferQuestionCorrection(
     AnalysisResult result, {
     required bool hasMultipleCandidates,
   }) {
     if (hasMultipleCandidates) return false;
-    return result.visualAssumptionStatus ==
-            VisualAssumptionStatus.needsReview ||
-        result.consistencyStatus == AnalysisConsistencyStatus.needsReview;
+    return _shouldOfferRetakeOrCorrection(result);
+  }
+
+  Future<void> _openRetakeCapture(
+    BuildContext context,
+    QuestionRecord record,
+  ) async {
+    ref.read(currentQuestionProvider.notifier).state = record;
+    await openCameraCaptureFlow(
+      context,
+      ref,
+      returnRoute: '/analysis/result',
+      retakeTarget: RetakeCaptureTarget(
+        returnRoute: '/analysis/result',
+        discardScanTaskQuestion: record,
+        subject: record.subject,
+      ),
+    );
   }
 
   String _candidateInsight({
@@ -990,7 +1083,7 @@ class _TagChip extends StatelessWidget {
 String _masteryLabel(MasteryLevel level) {
   switch (level) {
     case MasteryLevel.newQuestion:
-      return '未复习';
+      return '新收录';
     case MasteryLevel.reviewing:
       return '复习中';
     case MasteryLevel.mastered:

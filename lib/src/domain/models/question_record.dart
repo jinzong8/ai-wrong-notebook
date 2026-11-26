@@ -239,12 +239,14 @@ class QuestionRecord {
         orElse: () => QuestionContentFormat.plain,
       ),
       tags: List<String>.from(json['tags'] as List? ?? []),
-      createdAt: DateTime.tryParse(json['createdAt'] as String? ?? '') ??
-          DateTime.now(),
-      updatedAt: DateTime.tryParse(json['updatedAt'] as String? ?? '') ??
-          DateTime.now(),
+      createdAt:
+          DateTime.tryParse(json['createdAt'] as String? ?? '')?.toLocal() ??
+              DateTime.now(),
+      updatedAt:
+          DateTime.tryParse(json['updatedAt'] as String? ?? '')?.toLocal() ??
+              DateTime.now(),
       lastReviewedAt: json['lastReviewedAt'] != null
-          ? DateTime.tryParse(json['lastReviewedAt'] as String)
+          ? DateTime.tryParse(json['lastReviewedAt'] as String)?.toLocal()
           : null,
       reviewCount: json['reviewCount'] as int? ?? 0,
       isFavorite: json['isFavorite'] as bool? ?? false,

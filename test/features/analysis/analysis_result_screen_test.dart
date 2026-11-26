@@ -198,7 +198,10 @@ void main() {
 
     expect(find.text('可能解法'), findsOneWidget);
     expect(find.text('需核对 10 的标注含义'), findsOneWidget);
-    expect(find.text('核对题干后重新解析'), findsOneWidget);
+    expect(find.byKey(const Key('analysis-retake-button')), findsOneWidget);
+    expect(find.text('重新拍照'), findsOneWidget);
+    expect(find.byKey(const Key('analysis-edit-text-button')), findsOneWidget);
+    expect(find.text('修改题干'), findsOneWidget);
   });
 
   testWidgets('edited question text starts a fresh analysis draft',
@@ -263,7 +266,7 @@ void main() {
     ));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('核对题干后重新解析'));
+    await tester.tap(find.byKey(const Key('analysis-edit-text-button')));
     await tester.pumpAndSettle();
     expect(find.text('核对题干'), findsOneWidget);
     await tester.enterText(
@@ -1055,5 +1058,237 @@ void main() {
 
     expect(find.text('HOME'), findsOneWidget);
     expect(container.read(currentQuestionProvider), isNull);
+  });
+
+  testWidgets(
+      'shows both save and discard actions when candidate 1 failed and candidate 2 succeeded while viewing candidate 1',
+      (tester) async {
+    final container = ProviderContainer(
+      overrides: <Override>[
+        questionSplitServiceProvider
+            .overrideWithValue(const QuestionSplitService()),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    container.read(currentQuestionProvider.notifier).state =
+        QuestionRecord.draft(
+      id: 'q-cand1-failed-cand2-ok',
+      imagePath: '',
+      subject: Subject.math,
+      recognizedText: '1. 第一题\n2. 第二题',
+    ).copyWith(
+      splitResult: const QuestionSplitResult(
+        sourceText: '1. 第一题\n2. 第二题',
+        strategy: QuestionSplitStrategy.numbered,
+        candidates: <QuestionSplitCandidate>[
+          QuestionSplitCandidate(
+            id: 'candidate-1',
+            order: 1,
+            text: '1. 第一题',
+            strategy: QuestionSplitStrategy.numbered,
+          ),
+          QuestionSplitCandidate(
+            id: 'candidate-2',
+            order: 2,
+            text: '2. 第二题',
+            strategy: QuestionSplitStrategy.numbered,
+          ),
+        ],
+      ),
+      candidateAnalyses: const <CandidateAnalysisSnapshot>[
+        CandidateAnalysisSnapshot(
+          candidateId: 'candidate-1',
+          order: 1,
+          questionText: '1. 第一题',
+          status: CandidateAnalysisStatus.failed,
+          errorMessage: '超时失败',
+        ),
+        CandidateAnalysisSnapshot(
+          candidateId: 'candidate-2',
+          order: 2,
+          questionText: '2. 第二题',
+          analysisResult: AnalysisResult(
+            finalAnswer: 'x = 5',
+            steps: <String>['移项得 x = 5'],
+            aiTags: <String>['方程'],
+            knowledgePoints: <String>['一次方程'],
+            mistakeReason: '粗心',
+            studyAdvice: '验算',
+          ),
+        ),
+      ],
+    );
+
+    final router = GoRouter(
+      initialLocation: '/analysis/result',
+      routes: <GoRoute>[
+        GoRoute(
+          path: '/analysis/result',
+          builder: (_, __) => const AnalysisResultScreen(),
+        ),
+        GoRoute(
+          path: '/capture/split-confirmation',
+          builder: (_, __) => const Scaffold(body: Text('SPLIT_CONFIRMATION')),
+        ),
+      ],
+    );
+    addTearDown(router.dispose);
+
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: container,
+      child: MaterialApp.router(routerConfig: router),
+    ));
+    await tester.pumpAndSettle();
+
+    // Viewing Candidate 1 (failed -> displayResult == null), yet Candidate 2 succeeded:
+    expect(find.text('当前第 1 题'), findsOneWidget);
+    expect(find.text('第 1 题解析失败'), findsOneWidget);
+    expect(find.text('保存到错题本'), findsOneWidget);
+    expect(find.text('放弃本次结果'), findsOneWidget);
+
+    await tester.tap(find.text('保存到错题本'));
+    await tester.pumpAndSettle();
+    expect(find.text('SPLIT_CONFIRMATION'), findsOneWidget);
+    expect(
+      container.read(currentQuestionSplitSessionProvider)?.drafts.length,
+      1,
+    );
+  });
+
+  testWidgets(
+      'shows discard button and hides save button when displayResult is null and no candidate succeeded',
+      (tester) async {
+    final container = ProviderContainer(
+      overrides: <Override>[
+        questionSplitServiceProvider
+            .overrideWithValue(const QuestionSplitService()),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    container.read(currentQuestionProvider.notifier).state =
+        QuestionRecord.draft(
+      id: 'q-null-result',
+      imagePath: '',
+      subject: Subject.math,
+      recognizedText: '无法识别的题干',
+    );
+
+    final router = GoRouter(
+      initialLocation: '/analysis/result',
+      routes: <GoRoute>[
+        GoRoute(
+          path: '/',
+          builder: (_, __) => const Scaffold(body: Text('HOME')),
+        ),
+        GoRoute(
+          path: '/analysis/result',
+          builder: (_, __) => const AnalysisResultScreen(),
+        ),
+      ],
+    );
+    addTearDown(router.dispose);
+
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: container,
+      child: MaterialApp.router(routerConfig: router),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.text('新收录'), findsOneWidget);
+    expect(find.text('保存到错题本'), findsNothing);
+    expect(find.text('放弃本次结果'), findsOneWidget);
+
+    await tester.tap(find.text('放弃本次结果'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('放弃'));
+    await tester.pumpAndSettle();
+    expect(find.text('HOME'), findsOneWidget);
+  });
+
+  testWidgets(
+      'app bar overflow menu offers edit-text on normal single question and returnToDetail allows unchanged text reanalysis',
+      (tester) async {
+    final repo = InMemoryQuestionRepository();
+    final container = ProviderContainer(
+      overrides: <Override>[
+        questionRepositoryProvider.overrideWithValue(repo),
+        questionSplitServiceProvider
+            .overrideWithValue(const QuestionSplitService()),
+        scanTaskLifecycleServiceProvider.overrideWithValue(
+          ScanTaskLifecycleService(analysisJobs: null, questions: repo),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    container.read(currentQuestionProvider.notifier).state =
+        QuestionRecord.draft(
+      id: 'q-normal-menu',
+      imagePath: '',
+      subject: Subject.math,
+      recognizedText: '已知 2x = 10，求 x。',
+    ).copyWith(
+      analysisResult: const AnalysisResult(
+        finalAnswer: 'x = 5',
+        steps: <String>['两边除以 2'],
+        aiTags: <String>['方程'],
+        knowledgePoints: <String>['一元一次方程'],
+        mistakeReason: '粗心',
+        studyAdvice: '验算',
+      ),
+    );
+
+    String? loadingUri;
+    final router = GoRouter(
+      initialLocation: '/analysis/result',
+      routes: <GoRoute>[
+        GoRoute(
+          path: '/analysis/result',
+          builder: (_, __) => const AnalysisResultScreen(),
+        ),
+        GoRoute(
+          path: '/analysis/text-correction',
+          builder: (_, state) => QuestionTextCorrectionScreen(
+            returnToDetail: state.uri.queryParameters['from'] == 'detail',
+          ),
+        ),
+        GoRoute(
+          path: '/analysis/loading',
+          builder: (_, state) {
+            loadingUri = state.uri.toString();
+            return const Scaffold(body: Text('LOADING_ROUTE'));
+          },
+        ),
+      ],
+    );
+    addTearDown(router.dispose);
+
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: container,
+      child: MaterialApp.router(routerConfig: router),
+    ));
+    await tester.pumpAndSettle();
+
+    // Inline needsReview buttons are absent, but AppBar menu exposes 修改题干.
+    expect(find.byKey(const Key('analysis-edit-text-button')), findsNothing);
+    await tester.tap(find.byKey(const Key('analysis-more-menu')));
+    await tester.pumpAndSettle();
+    expect(find.text('重新拍照'), findsOneWidget);
+    expect(find.text('修改题干'), findsOneWidget);
+
+    await tester.tap(find.text('修改题干'));
+    await tester.pumpAndSettle();
+    expect(find.text('核对题干'), findsOneWidget);
+
+    // When returnToDetail == true, unchanged text can be submitted directly!
+    router.go('/analysis/text-correction?from=detail');
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('重新解析'));
+    await tester.pump();
+    await tester.pumpAndSettle();
+    expect(find.text('LOADING_ROUTE'), findsOneWidget);
+    expect(loadingUri, '/analysis/loading?reanalysis=1');
   });
 }

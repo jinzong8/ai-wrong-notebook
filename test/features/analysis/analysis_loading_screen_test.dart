@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -10,6 +11,7 @@ import 'package:smart_wrong_notebook/src/data/repositories/question_repository.d
 import 'package:smart_wrong_notebook/src/data/repositories/settings_repository.dart';
 import 'package:smart_wrong_notebook/src/data/services/question_analysis_coordinator.dart';
 import 'package:smart_wrong_notebook/src/data/services/question_analysis_pipeline.dart';
+import 'package:smart_wrong_notebook/src/data/services/scan_task_lifecycle_service.dart';
 import 'package:smart_wrong_notebook/src/domain/models/analysis_result.dart';
 import 'package:smart_wrong_notebook/src/domain/models/analysis_job.dart';
 import 'package:smart_wrong_notebook/src/domain/models/ai_provider_config.dart';
@@ -1173,4 +1175,95 @@ void main() {
     expect(result.splitResult, isNotNull);
     expect(result.splitResult?.strategy, QuestionSplitStrategy.numbered);
   });
+
+  testWidgets(
+      'reanalysis loading hides background capture actions, shows elapsed hint after 6s, and cancels pending job on back',
+      (tester) async {
+    final settingsRepo = _TestSettingsRepository();
+    final questionRepo = InMemoryQuestionRepository();
+    final savedOriginal = QuestionRecord.draft(
+      id: 'q-reanalysis-cancel',
+      imagePath: '/tmp/saved.jpg',
+      subject: Subject.math,
+      recognizedText: '原已保存题干',
+    ).copyWith(contentStatus: ContentStatus.ready);
+    await questionRepo.saveDraft(savedOriginal);
+
+    final lifecycle = _TrackingScanTaskLifecycleService(questions: questionRepo);
+    final coordinator = _DeferredBackgroundQuestionAnalysisCoordinator();
+
+    final container = ProviderContainer(
+      overrides: <Override>[
+        settingsRepositoryProvider.overrideWithValue(settingsRepo),
+        questionRepositoryProvider.overrideWithValue(questionRepo),
+        scanTaskLifecycleServiceProvider.overrideWithValue(lifecycle),
+        questionAnalysisCoordinatorProvider.overrideWithValue(coordinator),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    container.read(currentQuestionProvider.notifier).state =
+        savedOriginal.createReanalysisDraft(correctedText: '修改后待重算题干');
+
+    final router = GoRouter(
+      initialLocation: '/analysis/loading',
+      routes: <GoRoute>[
+        GoRoute(
+          path: '/analysis/loading',
+          builder: (_, __) => const AnalysisLoadingScreen(isReanalysis: true),
+        ),
+        GoRoute(
+          path: '/notebook/question/:id',
+          builder: (_, state) => Scaffold(
+            body: Text('DETAIL_${state.pathParameters['id']}'),
+          ),
+        ),
+      ],
+    );
+    addTearDown(router.dispose);
+
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: container,
+      child: MaterialApp.router(routerConfig: router),
+    ));
+    await tester.pump();
+
+    // Background capture & back-home buttons must NOT appear in reanalysis mode.
+    expect(find.text('重新解析'), findsOneWidget);
+    expect(find.text('后台解析，继续拍下一题'), findsNothing);
+    expect(find.text('先回首页'), findsNothing);
+    expect(find.byKey(const Key('loading-elapsed-hint')), findsNothing);
+
+    // Advance 6 seconds -> step advances to '即将完成...' and elapsed hint appears.
+    for (var s = 0; s < 6; s++) {
+      await tester.pump(const Duration(seconds: 1));
+    }
+    expect(find.text('即将完成...'), findsOneWidget);
+    expect(find.byKey(const Key('loading-elapsed-hint')), findsOneWidget);
+    expect(find.textContaining('已等待 6 秒'), findsOneWidget);
+
+    // Tap Back -> cancels pending reanalysis job via prepareRetry, restores saved record, and returns to detail.
+    await tester.tap(find.byIcon(CupertinoIcons.chevron_left));
+    await tester.pumpAndSettle();
+
+    expect(find.text('DETAIL_q-reanalysis-cancel'), findsOneWidget);
+    expect(lifecycle.preparedRetryIds, <String>['q-reanalysis-cancel']);
+    expect(
+      container.read(currentQuestionProvider)?.correctedText,
+      '原已保存题干',
+    );
+  });
+}
+
+class _TrackingScanTaskLifecycleService extends ScanTaskLifecycleService {
+  _TrackingScanTaskLifecycleService({required super.questions})
+      : super(analysisJobs: null);
+
+  final List<String> preparedRetryIds = <String>[];
+
+  @override
+  Future<void> prepareRetry(QuestionRecord source) async {
+    preparedRetryIds.add(source.id);
+    await super.prepareRetry(source);
+  }
 }

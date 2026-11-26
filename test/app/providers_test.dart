@@ -540,6 +540,7 @@ D. 开关只能控制全部支路''';
     expect(child.parentQuestionId, 'root-1');
     expect(child.rootQuestionId, 'existing-root');
     expect(child.splitOrder, 2);
+    expect(child.createdAt, source.createdAt);
     expect(child.subject, Subject.physics);
     expect(child.analysisResult?.finalAnswer, 'B');
     expect(child.savedExercises.single.questionId, 'root-1-2');

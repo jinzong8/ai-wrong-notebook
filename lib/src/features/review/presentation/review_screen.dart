@@ -10,132 +10,204 @@ import 'package:smart_wrong_notebook/src/shared/widgets/math_content_view.dart';
 class ReviewScreen extends ConsumerWidget {
   const ReviewScreen({super.key});
 
+  void _startContinuousReview(
+    BuildContext context,
+    WidgetRef ref,
+    List<QuestionRecord> queue,
+  ) {
+    if (queue.isEmpty) return;
+    final first = queue.first;
+    ref.read(activeReviewSessionProvider.notifier).state = ReviewSessionState(
+      queueIds: queue.map((q) => q.id).toList(),
+      currentIndex: 0,
+    );
+    ref.read(currentQuestionProvider.notifier).state = first;
+    ref.read(questionDetailReturnRouteProvider.notifier).state = '/review';
+    ref.read(questionDetailModeProvider.notifier).state =
+        QuestionDetailMode.review;
+    context.go('/notebook/question/${first.id}');
+  }
+
+  void _openMasteredQuestion(
+    BuildContext context,
+    WidgetRef ref,
+    QuestionRecord question,
+  ) {
+    ref.read(activeReviewSessionProvider.notifier).state = null;
+    ref.read(currentQuestionProvider.notifier).state = question;
+    ref.read(questionDetailReturnRouteProvider.notifier).state = '/review';
+    ref.read(questionDetailModeProvider.notifier).state =
+        QuestionDetailMode.browse;
+    context.go('/notebook/question/${question.id}');
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final questionsAsync = ref.watch(questionListProvider);
     final batchGroups = ref.watch(questionBatchGroupsProvider).valueOrNull;
     final colorScheme = Theme.of(context).colorScheme;
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('复习')),
-      body: questionsAsync.when(
-        data: (questions) {
-          final pending = questions
-              .where((q) => q.masteryLevel != MasteryLevel.mastered)
-              .toList();
-          final mastered = questions
-              .where((q) => q.masteryLevel == MasteryLevel.mastered)
-              .toList();
-
-          return DefaultTabController(
-            length: 2,
-            child: ListView(
-              padding: const EdgeInsets.all(24),
-              children: <Widget>[
-                _SummaryCard(
-                  total: questions.length,
-                  pending: pending.length,
-                  mastered: mastered.length,
-                ),
-                const SizedBox(height: 20),
-                Container(
-                  height: 40,
-                  padding: const EdgeInsets.all(3),
+    return DefaultTabController(
+      length: 2,
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('复习'),
+          actions: <Widget>[
+            Padding(
+              padding: const EdgeInsets.only(right: 12),
+              child: InkWell(
+                key: const Key('review-history-button'),
+                onTap: () => context.go('/review/history'),
+                borderRadius: BorderRadius.circular(999),
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   decoration: BoxDecoration(
                     color: colorScheme.surface,
                     borderRadius: BorderRadius.circular(999),
                     border: Border.all(color: colorScheme.outlineVariant),
                   ),
-                  child: TabBar(
-                    dividerColor: Colors.transparent,
-                    indicatorSize: TabBarIndicatorSize.tab,
-                    indicator: BoxDecoration(
-                      color: colorScheme.primary,
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                    labelColor: colorScheme.onPrimary,
-                    unselectedLabelColor: colorScheme.onSurfaceVariant,
-                    labelStyle: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                    ),
-                    unselectedLabelStyle: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                    ),
-                    tabs: <Widget>[
-                      Tab(text: '待复习 ${pending.length}'),
-                      Tab(text: '已掌握 ${mastered.length}'),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      Icon(
+                        CupertinoIcons.clock,
+                        size: 16,
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        '复习记录',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                          color: colorScheme.onSurface,
+                        ),
+                      ),
+                      const SizedBox(width: 2),
+                      Icon(
+                        CupertinoIcons.chevron_right,
+                        size: 14,
+                        color: colorScheme.onSurfaceVariant
+                            .withValues(alpha: 0.65),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+        body: questionsAsync.when(
+          data: (questions) {
+            final pending = sortDueReviewQuestions(
+              questions.where((q) => q.masteryLevel != MasteryLevel.mastered),
+            );
+            final mastered = questions
+                .where((q) => q.masteryLevel == MasteryLevel.mastered)
+                .toList()
+              ..sort((a, b) => (b.lastReviewedAt ?? b.updatedAt)
+                  .compareTo(a.lastReviewedAt ?? a.updatedAt));
+
+            return Column(
+              children: <Widget>[
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+                  child: Column(
+                    children: <Widget>[
+                      _SummaryCard(
+                        total: questions.length,
+                        pending: pending.length,
+                        mastered: mastered.length,
+                        onStartContinuousReview: pending.isNotEmpty
+                            ? () =>
+                                _startContinuousReview(context, ref, pending)
+                            : null,
+                      ),
+                      const SizedBox(height: 16),
+                      Container(
+                        height: 40,
+                        padding: const EdgeInsets.all(3),
+                        decoration: BoxDecoration(
+                          color: colorScheme.surface,
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(color: colorScheme.outlineVariant),
+                        ),
+                        child: TabBar(
+                          dividerColor: Colors.transparent,
+                          indicatorSize: TabBarIndicatorSize.tab,
+                          indicator: BoxDecoration(
+                            color: colorScheme.primary,
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          labelColor: colorScheme.onPrimary,
+                          unselectedLabelColor: colorScheme.onSurfaceVariant,
+                          labelStyle: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                          ),
+                          unselectedLabelStyle: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
+                          tabs: <Widget>[
+                            Tab(text: '待复习 ${pending.length}'),
+                            Tab(text: '已掌握 ${mastered.length}'),
+                          ],
+                        ),
+                      ),
                     ],
                   ),
                 ),
                 const SizedBox(height: 12),
-                SizedBox(
-                  height: 420,
+                Expanded(
                   child: TabBarView(
                     children: <Widget>[
                       _ReviewQuestionList(
                         questions: pending,
-                        emptyMessage: '暂无待复习错题',
+                        isMasteredTab: false,
                         batchGroups: batchGroups,
-                        ref: ref,
+                        onSelectQuestion: (question) {
+                          final orderedQueue = <QuestionRecord>[
+                            question,
+                            ...pending.where((q) => q.id != question.id),
+                          ];
+                          _startContinuousReview(context, ref, orderedQueue);
+                        },
                       ),
                       _ReviewQuestionList(
                         questions: mastered,
-                        emptyMessage: '暂无已掌握错题',
+                        isMasteredTab: true,
                         batchGroups: batchGroups,
-                        ref: ref,
+                        onSelectQuestion: (question) =>
+                            _openMasteredQuestion(context, ref, question),
                       ),
                     ],
                   ),
                 ),
-                const SizedBox(height: 24),
-                GestureDetector(
-                  onTap: () => context.go('/review/history'),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 12),
-                    decoration: BoxDecoration(
-                      color: colorScheme.surface,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: colorScheme.outlineVariant),
-                    ),
-                    child: Row(
-                      children: <Widget>[
-                        Icon(CupertinoIcons.clock,
-                            size: 20, color: colorScheme.onSurfaceVariant),
-                        const SizedBox(width: 12),
-                        Expanded(
-                            child: Text('复习记录',
-                                style: TextStyle(
-                                    fontSize: 14,
-                                    color: colorScheme.onSurface))),
-                        Icon(CupertinoIcons.chevron_right,
-                            size: 22,
-                            color: colorScheme.onSurfaceVariant
-                                .withValues(alpha: 0.65)),
-                      ],
-                    ),
-                  ),
-                ),
               ],
-            ),
-          );
-        },
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('加载失败: $e')),
+            );
+          },
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (e, _) => Center(child: Text('加载失败: $e')),
+        ),
       ),
     );
   }
 }
 
 class _SummaryCard extends StatelessWidget {
-  const _SummaryCard(
-      {required this.total, required this.pending, required this.mastered});
+  const _SummaryCard({
+    required this.total,
+    required this.pending,
+    required this.mastered,
+    this.onStartContinuousReview,
+  });
 
   final int total;
   final int pending;
   final int mastered;
+  final VoidCallback? onStartContinuousReview;
 
   @override
   Widget build(BuildContext context) {
@@ -180,6 +252,21 @@ class _SummaryCard extends StatelessWidget {
                   value: '$total', label: '总错题', color: colorScheme.onSurface),
             ],
           ),
+          if (onStartContinuousReview != null) ...<Widget>[
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                key: const Key('start-continuous-review-button'),
+                onPressed: onStartContinuousReview,
+                icon: const Icon(CupertinoIcons.play_fill, size: 16),
+                label: Text('开始连续复习 ($pending 题)'),
+                style: FilledButton.styleFrom(
+                  minimumSize: const Size(double.infinity, 46),
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -209,14 +296,46 @@ class _MiniStat extends StatelessWidget {
 }
 
 class _EmptyCard extends StatelessWidget {
-  const _EmptyCard({required this.message});
+  const _EmptyCard({required this.isMasteredTab});
 
-  final String message;
+  final bool isMasteredTab;
+
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     const green = Color(0xFF16A34A);
+
+    if (isMasteredTab) {
+      return Container(
+        padding: const EdgeInsets.all(32),
+        decoration: BoxDecoration(
+          color: colorScheme.surface,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: colorScheme.outlineVariant),
+        ),
+        child: Column(
+          children: <Widget>[
+            Icon(
+              CupertinoIcons.checkmark_seal,
+              size: 48,
+              color: colorScheme.onSurfaceVariant.withValues(alpha: 0.55),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              '暂无已掌握错题',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '在复习中标记「已掌握」后会归档到这里',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: colorScheme.onSurfaceVariant),
+            ),
+          ],
+        ),
+      );
+    }
 
     return Container(
       padding: const EdgeInsets.all(32),
@@ -236,7 +355,10 @@ class _EmptyCard extends StatelessWidget {
           const Text('太棒了！',
               style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
           const SizedBox(height: 4),
-          Text(message, style: TextStyle(color: colorScheme.onSurfaceVariant)),
+          Text(
+            '暂无待复习错题',
+            style: TextStyle(color: colorScheme.onSurfaceVariant),
+          ),
         ],
       ),
     );
@@ -246,36 +368,38 @@ class _EmptyCard extends StatelessWidget {
 class _ReviewQuestionList extends StatelessWidget {
   const _ReviewQuestionList({
     required this.questions,
-    required this.emptyMessage,
+    required this.isMasteredTab,
     required this.batchGroups,
-    required this.ref,
+    required this.onSelectQuestion,
   });
 
   final List<QuestionRecord> questions;
-  final String emptyMessage;
+  final bool isMasteredTab;
   final Map<String, QuestionBatchGroup>? batchGroups;
-  final WidgetRef ref;
+  final ValueChanged<QuestionRecord> onSelectQuestion;
 
   @override
   Widget build(BuildContext context) {
-    if (questions.isEmpty) return _EmptyCard(message: emptyMessage);
+    if (questions.isEmpty) {
+      return ListView(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+        children: <Widget>[
+          _EmptyCard(isMasteredTab: isMasteredTab),
+        ],
+      );
+    }
 
-    return ListView(
-      padding: EdgeInsets.zero,
-      children: questions
-          .map((q) => _ReviewCard(
-                question: q,
-                batchLabel: _batchLabel(q, batchGroups),
-                onOpen: () {
-                  ref.read(currentQuestionProvider.notifier).state = q;
-                  ref.read(questionDetailReturnRouteProvider.notifier).state =
-                      '/review';
-                  ref.read(questionDetailModeProvider.notifier).state =
-                      QuestionDetailMode.review;
-                  context.go('/notebook/question/${q.id}');
-                },
-              ))
-          .toList(),
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+      itemCount: questions.length,
+      itemBuilder: (context, index) {
+        final q = questions[index];
+        return _ReviewCard(
+          question: q,
+          batchLabel: _batchLabel(q, batchGroups),
+          onOpen: () => onSelectQuestion(q),
+        );
+      },
     );
   }
 }

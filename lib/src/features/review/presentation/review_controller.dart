@@ -1,4 +1,5 @@
 import 'package:uuid/uuid.dart';
+import 'package:smart_wrong_notebook/src/app/providers.dart';
 import 'package:smart_wrong_notebook/src/data/repositories/question_repository.dart';
 import 'package:smart_wrong_notebook/src/domain/models/mastery_level.dart';
 import 'package:smart_wrong_notebook/src/domain/models/question_record.dart';
@@ -25,12 +26,14 @@ class ReviewController {
     if (question == null) {
       throw ArgumentError('Question not found: $id');
     }
+    final now = DateTime.now();
     final updated = question.copyWith(
       masteryLevel: MasteryLevel.mastered,
       reviewCount: question.reviewCount + 1,
+      lastReviewedAt: now,
     );
     await _repository.update(updated);
-    await _writeLog(id, 'mastered', MasteryLevel.mastered);
+    await _writeLog(id, 'mastered', MasteryLevel.mastered, reviewedAt: now);
     return updated;
   }
 
@@ -39,12 +42,14 @@ class ReviewController {
     if (question == null) {
       throw ArgumentError('Question not found: $id');
     }
+    final now = DateTime.now();
     final updated = question.copyWith(
       masteryLevel: MasteryLevel.reviewing,
       reviewCount: question.reviewCount + 1,
+      lastReviewedAt: now,
     );
     await _repository.update(updated);
-    await _writeLog(id, 'reviewing', MasteryLevel.reviewing);
+    await _writeLog(id, 'reviewing', MasteryLevel.reviewing, reviewedAt: now);
     return updated;
   }
 
@@ -63,16 +68,23 @@ class ReviewController {
 
   Future<List<QuestionRecord>> getDueQuestions() async {
     final all = await _repository.listAll();
-    return all.where((q) => q.masteryLevel != MasteryLevel.mastered).toList();
+    return sortDueReviewQuestions(
+      all.where((q) => q.masteryLevel != MasteryLevel.mastered),
+    );
   }
 
-  Future<void> _writeLog(String questionId, String result, MasteryLevel masteryAfter) async {
+  Future<void> _writeLog(
+    String questionId,
+    String result,
+    MasteryLevel masteryAfter, {
+    DateTime? reviewedAt,
+  }) async {
     final repo = _logRepository;
     if (repo == null) return;
     final log = ReviewLog(
       id: const Uuid().v4(),
       questionRecordId: questionId,
-      reviewedAt: DateTime.now(),
+      reviewedAt: reviewedAt ?? DateTime.now(),
       result: result,
       masteryAfter: masteryAfter,
     );

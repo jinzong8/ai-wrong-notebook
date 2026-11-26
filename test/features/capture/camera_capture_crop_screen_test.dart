@@ -10,6 +10,7 @@ import 'package:smart_wrong_notebook/src/data/files/image_storage_service.dart';
 import 'package:smart_wrong_notebook/src/data/repositories/question_repository.dart';
 import 'package:smart_wrong_notebook/src/data/repositories/settings_repository.dart';
 import 'package:smart_wrong_notebook/src/data/services/capture_service.dart';
+import 'package:smart_wrong_notebook/src/data/services/scan_task_lifecycle_service.dart';
 import 'package:smart_wrong_notebook/src/domain/models/ai_provider_config.dart';
 import 'package:smart_wrong_notebook/src/domain/models/content_status.dart';
 import 'package:smart_wrong_notebook/src/domain/models/question_record.dart';
@@ -1665,6 +1666,122 @@ void main() {
               outJpg.getPixel(outJpg.width - 35, outJpg.height ~/ 2);
           expect(rightPx.g, greaterThan(140));
           expect(rightPx.r, lessThan(80));
+        } finally {
+          tempDir.deleteSync(recursive: true);
+        }
+      },
+    );
+
+    testWidgets(
+      'in-place retake mode shows replace hint, cancels back cleanly, and reuses question id on confirm',
+      (tester) async {
+        final tempDir =
+            Directory.systemTemp.createTempSync('camera_retake_replace_');
+        final storage = _TempImageStorageService(tempDir);
+        final session = _FakeCameraCaptureSession(
+          photoFactory: () => _createThreeBandWorksheetPng(
+            tempDir,
+            name: 'retake_clear.png',
+            width: 300,
+            height: 200,
+          ),
+        );
+        final repo = InMemoryQuestionRepository();
+        final existing = QuestionRecord.draft(
+          id: 'q-replace-99',
+          imagePath: '/tmp/old.jpg',
+          subject: Subject.math,
+          recognizedText: '旧的模糊题干',
+        );
+        await repo.saveDraft(existing);
+
+        final container = ProviderContainer(
+          overrides: <Override>[
+            cameraCaptureSessionFactoryProvider
+                .overrideWithValue(() => session),
+            imageStorageServiceProvider.overrideWithValue(storage),
+            questionRepositoryProvider.overrideWithValue(repo),
+            scanTaskLifecycleServiceProvider.overrideWithValue(
+              ScanTaskLifecycleService(analysisJobs: null, questions: repo),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        container.read(retakeCaptureTargetProvider.notifier).state =
+            const RetakeCaptureTarget(
+          returnRoute: '/notebook/question/q-replace-99',
+          replaceQuestionId: 'q-replace-99',
+          subject: Subject.math,
+        );
+
+        String? loadingReanalysisParam;
+        final router = GoRouter(
+          initialLocation: '/capture/camera',
+          routes: <RouteBase>[
+            GoRoute(
+              path: '/capture/camera',
+              builder: (_, __) => const CameraCaptureCropScreen(),
+            ),
+            GoRoute(
+              path: '/notebook/question/:id',
+              builder: (_, __) => const Scaffold(body: Text('DETAIL_RETURN')),
+            ),
+            GoRoute(
+              path: '/analysis/loading',
+              builder: (_, state) {
+                loadingReanalysisParam = state.uri.queryParameters['reanalysis'];
+                return const Scaffold(body: Text('REANALYSIS_LOADING'));
+              },
+            ),
+          ],
+        );
+        addTearDown(router.dispose);
+
+        try {
+          await tester.pumpWidget(
+            UncontrolledProviderScope(
+              container: container,
+              child: MaterialApp.router(routerConfig: router),
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          expect(find.text('重新拍照'), findsOneWidget);
+          expect(
+            find.text('重新对准题目拍照，确认后将原地替换原图并重新解析'),
+            findsOneWidget,
+          );
+
+          // Take photo -> enter crop -> press retake -> take again -> confirm.
+          await tester.tap(find.byKey(const Key('camera-shutter-button')));
+          await tester.pump();
+          await _pumpUntilFound(tester, find.byKey(const Key('crop-canvas')));
+          await tester.pumpAndSettle();
+          expect(find.text('重拍框选'), findsOneWidget);
+
+          await tester.tap(find.byKey(const Key('crop-retake-button')));
+          await tester.pumpAndSettle();
+          expect(find.text('重新拍照'), findsOneWidget);
+
+          await tester.tap(find.byKey(const Key('camera-shutter-button')));
+          await tester.pump();
+          await _pumpUntilFound(tester, find.byKey(const Key('crop-canvas')));
+          await tester.pumpAndSettle();
+
+          await tester.tap(find.byKey(const Key('crop-confirm')));
+          await tester.pump();
+          await _pumpUntilFound(tester, find.text('REANALYSIS_LOADING'));
+          await tester.pumpAndSettle();
+
+          expect(loadingReanalysisParam, '1');
+          expect(container.read(retakeCaptureTargetProvider), isNull);
+          final submitted = container.read(currentQuestionProvider);
+          expect(submitted, isNotNull);
+          expect(submitted!.id, 'q-replace-99');
+          expect(submitted.extractedQuestionText, isEmpty);
+          expect(submitted.subject, Subject.math);
+          expect(submitted.imagePath, storage.lastSavedPath);
         } finally {
           tempDir.deleteSync(recursive: true);
         }

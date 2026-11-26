@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -146,6 +147,15 @@ class _ImageCropScreenState extends ConsumerState<ImageCropScreen> {
     }
 
     setState(() => _saving = true);
+    final oldImagePath = current.imagePath;
+    final Future<List<QuestionRecord>?>? savedQuestionsFuture =
+        oldImagePath.isNotEmpty
+            ? ref
+                .read(questionRepositoryProvider)
+                .listAll()
+                .then<List<QuestionRecord>?>((list) => list)
+                .catchError((_) => null)
+            : null;
     File? tempFile;
     try {
       final jpgBytes = await cropAndEncodeJpg(
@@ -164,6 +174,24 @@ class _ImageCropScreenState extends ConsumerState<ImageCropScreen> {
 
       final storage = ref.read(imageStorageServiceProvider);
       final savedPath = await storage.saveImage(tempFile);
+      if (oldImagePath.isNotEmpty &&
+          oldImagePath != savedPath &&
+          savedQuestionsFuture != null) {
+        unawaited(() async {
+          try {
+            final savedQuestions = await savedQuestionsFuture;
+            if (savedQuestions == null) return;
+            final isReferenced = savedQuestions
+                .any((question) => question.imagePath == oldImagePath);
+            if (!isReferenced) {
+              final oldFile = File(oldImagePath);
+              if (oldFile.existsSync()) {
+                oldFile.deleteSync();
+              }
+            }
+          } catch (_) {}
+        }());
+      }
       if (!mounted) return;
 
       final newRecord = QuestionRecord.draft(
@@ -184,7 +212,7 @@ class _ImageCropScreenState extends ConsumerState<ImageCropScreen> {
     } finally {
       if (tempFile != null && tempFile.existsSync()) {
         try {
-          await tempFile.delete();
+          tempFile.deleteSync();
         } catch (_) {}
       }
     }

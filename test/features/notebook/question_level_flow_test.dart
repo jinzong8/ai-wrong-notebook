@@ -29,12 +29,15 @@ import 'package:smart_wrong_notebook/src/features/notebook/presentation/question
 class _ExerciseGeneratingAiService extends AiAnalysisService {
   _ExerciseGeneratingAiService({
     this.overrideExercises,
+    this.failNextFollowUp = false,
   }) : super(settingsRepository: InMemorySettingsRepository());
 
   final List<GeneratedExercise>? overrideExercises;
+  bool failNextFollowUp;
   int generateCallCount = 0;
   int followUpCallCount = 0;
   String? lastFollowUpQuestion;
+  List<AiFollowUpMessage> lastFollowUpHistory = const <AiFollowUpMessage>[];
 
   @override
   Future<List<GeneratedExercise>> generateExercisesForQuestion(
@@ -93,6 +96,11 @@ class _ExerciseGeneratingAiService extends AiAnalysisService {
   }) async {
     followUpCallCount++;
     lastFollowUpQuestion = userQuestion;
+    lastFollowUpHistory = history;
+    if (failNextFollowUp) {
+      failNextFollowUp = false;
+      throw StateError('模拟网络超时');
+    }
     return r'''因为等式两边同时减去同一个数，等式仍然成立，所以可以先移项。
 
 移项的目的，是把含有 \(x\) 的部分单独留下。
@@ -1163,5 +1171,394 @@ void main() {
     expect(find.text('恢复为待复习'), findsOneWidget);
     final updated = await repository.getById(question.id);
     expect(updated?.masteryLevel, MasteryLevel.mastered);
+  });
+
+  testWidgets(
+      'notebook screen filters by customTags and aiTags chips, sorts, and syncs search reset',
+      (tester) async {
+    final repository = InMemoryQuestionRepository();
+    final mathQuestion = QuestionRecord(
+      id: 'q-filter-math',
+      imagePath: '',
+      subject: Subject.math,
+      extractedQuestionText: '数学题：求二次函数顶点',
+      normalizedQuestionText: '数学题：求二次函数顶点',
+      contentFormat: QuestionContentFormat.plain,
+      tags: const <String>[],
+      createdAt: DateTime(2026, 3, 1, 10),
+      updatedAt: DateTime(2026, 3, 1, 10),
+      lastReviewedAt: null,
+      reviewCount: 5,
+      isFavorite: false,
+      contentStatus: ContentStatus.ready,
+      masteryLevel: MasteryLevel.newQuestion,
+      analysisResult: const AnalysisResult(
+        finalAnswer: '(1, 2)',
+        steps: <String>['配方法'],
+        aiTags: <String>['二次函数'],
+        knowledgePoints: <String>['配方法'],
+        mistakeReason: '配方符号错误',
+        studyAdvice: '巩固顶点式',
+        subject: Subject.math,
+      ),
+      aiTags: const <String>['二次函数'],
+      aiKnowledgePoints: const <String>['配方法'],
+      customTags: const <String>['期中重点'],
+    );
+    final physicsQuestion = QuestionRecord(
+      id: 'q-filter-physics',
+      imagePath: '',
+      subject: Subject.physics,
+      extractedQuestionText: '物理题：受力分析求摩擦力',
+      normalizedQuestionText: '物理题：受力分析求摩擦力',
+      contentFormat: QuestionContentFormat.plain,
+      tags: const <String>[],
+      createdAt: DateTime(2026, 3, 2, 10),
+      updatedAt: DateTime(2026, 3, 2, 10),
+      lastReviewedAt: DateTime(2026, 3, 2, 12),
+      reviewCount: 1,
+      isFavorite: false,
+      contentStatus: ContentStatus.ready,
+      masteryLevel: MasteryLevel.mastered,
+      analysisResult: const AnalysisResult(
+        finalAnswer: 'f = 10N',
+        steps: <String>['正交分解'],
+        aiTags: <String>['静摩擦力'],
+        knowledgePoints: <String>['平衡条件'],
+        mistakeReason: '滑动与静摩擦混淆',
+        studyAdvice: '先判断相对运动趋势',
+        subject: Subject.physics,
+      ),
+      aiTags: const <String>['静摩擦力'],
+      aiKnowledgePoints: const <String>['平衡条件'],
+      customTags: const <String>['易错本'],
+    );
+    await repository.saveDrafts(<QuestionRecord>[
+      mathQuestion,
+      physicsQuestion,
+    ]);
+
+    final container = ProviderContainer(
+      overrides: <Override>[
+        questionRepositoryProvider.overrideWithValue(repository),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: container,
+      child: const MaterialApp(home: NotebookScreen()),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.text('数学题：求二次函数顶点'), findsOneWidget);
+    expect(find.text('物理题：受力分析求摩擦力'), findsOneWidget);
+
+    // Tapping a customTags chip filters matching questions instead of returning empty
+    await tester.tap(find.text('期中重点'));
+    await tester.pumpAndSettle();
+    expect(find.text('数学题：求二次函数顶点'), findsOneWidget);
+    expect(find.text('物理题：受力分析求摩擦力'), findsNothing);
+    expect(find.text('📚 期中重点'), findsOneWidget);
+
+    // Tapping 全部 resets knowledgePoint and all active filters
+    await tester.tap(find.byKey(const Key('notebook-filter-all')));
+    await tester.pumpAndSettle();
+    expect(find.text('数学题：求二次函数顶点'), findsOneWidget);
+    expect(find.text('物理题：受力分析求摩擦力'), findsOneWidget);
+
+    // Tapping an aiTags chip also filters matching questions
+    await tester.tap(find.text('静摩擦力'));
+    await tester.pumpAndSettle();
+    expect(find.text('物理题：受力分析求摩擦力'), findsOneWidget);
+    expect(find.text('数学题：求二次函数顶点'), findsNothing);
+
+    await tester.tap(find.byKey(const Key('notebook-filter-all')));
+    await tester.pumpAndSettle();
+
+    // Sort menu switches from newestFirst (physics first) to mostReviewed (math first)
+    expect(
+      tester.getTopLeft(find.text('物理题：受力分析求摩擦力')).dy,
+      lessThan(tester.getTopLeft(find.text('数学题：求二次函数顶点')).dy),
+    );
+    await tester.tap(find.byKey(const Key('notebook-sort-button')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('复习最多'));
+    await tester.pumpAndSettle();
+    expect(
+      tester.getTopLeft(find.text('数学题：求二次函数顶点')).dy,
+      lessThan(tester.getTopLeft(find.text('物理题：受力分析求摩擦力')).dy),
+    );
+
+    // External searchQueryProvider reset syncs _searchController text cleanly
+    await tester.enterText(find.byType(TextField), '二次函数');
+    await tester.pumpAndSettle();
+    expect(find.text('物理题：受力分析求摩擦力'), findsNothing);
+    container.read(searchQueryProvider.notifier).state = '';
+    await tester.pumpAndSettle();
+    final textField = tester.widget<TextField>(find.byType(TextField));
+    expect(textField.controller?.text, '');
+    expect(find.text('物理题：受力分析求摩擦力'), findsOneWidget);
+  });
+
+  testWidgets(
+      'question detail resolves deep-link route id, persists subject edit & custom tag delete, rolls back failed follow-up, and opens practice round review',
+      (tester) async {
+    final repository = InMemoryQuestionRepository();
+    final service = _ExerciseGeneratingAiService(failNextFollowUp: true);
+    final completedRound = <GeneratedExercise>[
+      GeneratedExercise(
+        id: 'q-edit-1-round-1-exercise-1',
+        questionId: 'q-edit-1',
+        generationMode: ExerciseGenerationMode.practice,
+        difficulty: '同级',
+        question: '已完成练习题',
+        options: const <String>['A. 1', 'B. 2'],
+        answer: 'A',
+        explanation: '解析',
+        createdAt: DateTime(2026),
+        order: 0,
+        isCorrect: true,
+        userAnswer: 'A',
+        roundIndex: 1,
+        roundTotal: 1,
+        roundGroupId: 'q-edit-1-round-1',
+      ),
+    ];
+    final question = _buildSavedSplitQuestion(
+      id: 'q-edit-1',
+      savedExercises: completedRound,
+    );
+    await repository.saveDraft(question);
+
+    final container = ProviderContainer(
+      overrides: <Override>[
+        questionRepositoryProvider.overrideWithValue(repository),
+        aiAnalysisServiceProvider.overrideWithValue(service),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    Uri? openedPracticeUri;
+    final router = GoRouter(
+      initialLocation: '/notebook/question/q-edit-1',
+      routes: <GoRoute>[
+        GoRoute(
+          path: '/notebook/question/:id',
+          builder: (_, __) => const QuestionDetailScreen(),
+        ),
+        GoRoute(
+          path: '/exercise/practice',
+          builder: (_, state) {
+            openedPracticeUri = state.uri;
+            return const Scaffold(body: Text('PRACTICE_REVIEW_MODE'));
+          },
+        ),
+      ],
+    );
+    addTearDown(router.dispose);
+
+    // Note: currentQuestionProvider starts null, testing route ID resolution!
+    expect(container.read(currentQuestionProvider), isNull);
+
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: container,
+      child: MaterialApp.router(routerConfig: router),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.text('第一题：已知 x+1=3，求 x'), findsOneWidget);
+    expect(find.byKey(const Key('detail-subject-pill')), findsOneWidget);
+    expect(find.text('数学'), findsOneWidget);
+    expect(find.text('课堂'), findsOneWidget);
+
+    // Edit Subject via detail-subject-pill -> persists to QuestionRepository
+    await tester.tap(find.byKey(const Key('detail-subject-pill')));
+    await tester.pumpAndSettle();
+    expect(find.text('选择科目'), findsOneWidget);
+    await tester.tap(find.text('物理'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('物理'), findsOneWidget);
+    expect((await repository.getById('q-edit-1'))?.subject, Subject.physics);
+
+    // Delete custom tag via delete-custom-tag-课堂 -> persists to QuestionRepository
+    await tester.tap(find.byKey(const Key('delete-custom-tag-课堂')));
+    await tester.pumpAndSettle();
+    expect(find.text('课堂'), findsNothing);
+    expect((await repository.getById('q-edit-1'))?.customTags, isEmpty);
+
+    // Failed follow-up rolls back optimistic user bubble and restores input text
+    await tester.scrollUntilVisible(
+      find.text('追问这道题'),
+      220,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('追问这道题'));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField).last, '这一步为什么变号？');
+    await tester.tap(find.text('发送追问'));
+    await tester.pumpAndSettle();
+
+    expect(service.followUpCallCount, 1);
+    final restoredField =
+        tester.widget<TextField>(find.byType(TextField).last);
+    expect(restoredField.controller?.text, '这一步为什么变号？');
+    // Retrying sends clean empty history without consecutive user -> user messages
+    ScaffoldMessenger.of(tester.element(find.byType(QuestionDetailScreen)))
+        .hideCurrentSnackBar();
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('发送追问'));
+    await tester.pumpAndSettle();
+    expect(service.followUpCallCount, 2);
+    expect(service.lastFollowUpHistory, isEmpty);
+
+    // Practice round review entry ('回看本组') navigates to /exercise/practice?review=1
+    final reviewPracticeBtn =
+        find.byKey(const Key('detail-review-practice-round'));
+    await tester.scrollUntilVisible(
+      reviewPracticeBtn,
+      220,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('回看本组'), findsOneWidget);
+    await tester.tap(reviewPracticeBtn);
+    await tester.pumpAndSettle();
+
+    expect(find.text('PRACTICE_REVIEW_MODE'), findsOneWidget);
+    expect(openedPracticeUri?.path, '/exercise/practice');
+    expect(openedPracticeUri?.queryParameters['review'], '1');
+  });
+
+  testWidgets(
+      'continuous active-recall review mode masks answers, reveals on tap, advances to next question, and finishes session',
+      (tester) async {
+    final repository = InMemoryQuestionRepository();
+    final reviewLogs = InMemoryReviewLogRepository();
+    final q1 = _buildSavedSplitQuestion(
+      id: 'q-rev-1',
+      text: '复习题一：解方程 x+3=7',
+      splitOrder: 1,
+    );
+    final q2 = _buildSavedSplitQuestion(
+      id: 'q-rev-2',
+      text: '复习题二：解方程 2y=10',
+      splitOrder: 2,
+    ).copyWith(
+      analysisResult: const AnalysisResult(
+        finalAnswer: 'y=5',
+        steps: <String>['两边除以 2'],
+        aiTags: <String>['一次方程'],
+        knowledgePoints: <String>['等式性质'],
+        mistakeReason: '系数除错',
+        studyAdvice: '检验答案',
+        subject: Subject.math,
+      ),
+    );
+    await repository.saveDrafts(<QuestionRecord>[q1, q2]);
+
+    final container = ProviderContainer(
+      overrides: <Override>[
+        questionRepositoryProvider.overrideWithValue(repository),
+        reviewLogRepositoryProvider.overrideWithValue(reviewLogs),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    container.read(currentQuestionProvider.notifier).state = q1;
+    container.read(questionDetailReturnRouteProvider.notifier).state =
+        '/review';
+    container.read(questionDetailModeProvider.notifier).state =
+        QuestionDetailMode.review;
+    container.read(activeReviewSessionProvider.notifier).state =
+        const ReviewSessionState(
+      queueIds: <String>['q-rev-1', 'q-rev-2'],
+      currentIndex: 0,
+    );
+
+    final router = GoRouter(
+      initialLocation: '/notebook/question/q-rev-1',
+      routes: <GoRoute>[
+        GoRoute(
+          path: '/review',
+          builder: (_, __) => const Scaffold(body: Text('REVIEW_SCREEN')),
+        ),
+        GoRoute(
+          path: '/notebook/question/:id',
+          builder: (_, __) => const QuestionDetailScreen(),
+        ),
+      ],
+    );
+    addTearDown(router.dispose);
+
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: container,
+      child: MaterialApp.router(routerConfig: router),
+    ));
+    await tester.pumpAndSettle();
+
+    // Question 1: progress header + active recall mask hides answer initially
+    expect(find.text('复习 (1/2)'), findsOneWidget);
+    expect(find.text('复习题一：解方程 x+3=7'), findsOneWidget);
+    expect(find.text('正确答案'), findsNothing);
+    expect(find.text('x=2'), findsNothing);
+
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('review-active-recall-card')),
+      180,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('review-active-recall-card')), findsOneWidget);
+    expect(find.text('先独立思考，再核对答案'), findsOneWidget);
+    expect(find.text('查看答案与解析'), findsOneWidget);
+
+    // Tapping 查看答案与解析 reveals solution for Question 1
+    await tester.ensureVisible(
+      find.byKey(const Key('review-reveal-answer-button')),
+    );
+    await tester.tap(find.byKey(const Key('review-reveal-answer-button')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('正确答案'), findsOneWidget);
+    expect(find.text('x=2'), findsOneWidget);
+
+    // Tapping 仍需复习 advances immediately to Question 2 and re-masks Question 2's answer
+    await tester.tap(find.byKey(const Key('detail-mark-reviewing')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('复习 (2/2)'), findsOneWidget);
+    expect(find.text('复习题二：解方程 2y=10'), findsOneWidget);
+    expect(find.text('正确答案'), findsNothing);
+    expect(find.text('y=5'), findsNothing);
+
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('review-active-recall-card')),
+      180,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('review-active-recall-card')), findsOneWidget);
+    expect(find.text('查看答案与解析'), findsOneWidget);
+    expect(find.text('正确答案'), findsNothing);
+    expect(find.text('y=5'), findsNothing);
+    expect(
+      (await repository.getById('q-rev-1'))?.masteryLevel,
+      MasteryLevel.reviewing,
+    );
+
+    // Tapping 已掌握 on Question 2 finishes the session and returns to /review
+    await tester.tap(find.byKey(const Key('detail-mark-mastered')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('REVIEW_SCREEN'), findsOneWidget);
+    expect(container.read(activeReviewSessionProvider), isNull);
+    expect(
+      (await repository.getById('q-rev-2'))?.masteryLevel,
+      MasteryLevel.mastered,
+    );
   });
 }

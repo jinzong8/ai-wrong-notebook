@@ -624,7 +624,7 @@ class AiAnalysisService {
                 : 'auto',
           );
           final analysis = _parseAnalysisResponse(content);
-          return _ensureAnalysisConsistency(
+          return await _ensureAnalysisConsistency(
             analysis,
             questionText: correctedText,
             subjectName: subjectName,
@@ -635,7 +635,7 @@ class AiAnalysisService {
         } on DioException catch (e) {
           if (_shouldUseExtractedTextFallbackAfterImageFailure(
               e, subjectName)) {
-            return _analyzeAfterImageFailureWithTextFallback(
+            return await _analyzeAfterImageFailureWithTextFallback(
               config: config,
               systemPrompt: systemPrompt,
               correctedText: correctedText,
@@ -658,7 +658,7 @@ class AiAnalysisService {
             imageDetail: 'auto',
           );
           final analysis = _parseAnalysisResponse(content);
-          return _ensureAnalysisConsistency(
+          return await _ensureAnalysisConsistency(
             analysis,
             questionText: correctedText,
             subjectName: subjectName,
@@ -671,7 +671,7 @@ class AiAnalysisService {
             e,
             subjectName,
           )) {
-            return _analyzeAfterImageFailureWithTextFallback(
+            return await _analyzeAfterImageFailureWithTextFallback(
               config: config,
               systemPrompt: systemPrompt,
               correctedText: correctedText,
@@ -704,7 +704,7 @@ class AiAnalysisService {
         );
       }
       final analysis = _parseAnalysisResponse(content);
-      return _ensureAnalysisConsistency(
+      return await _ensureAnalysisConsistency(
         analysis,
         questionText: correctedText,
         subjectName: subjectName,
@@ -2149,17 +2149,27 @@ class AiAnalysisService {
 - 回答尽量短而清楚，优先解释“为什么”和“下一步怎么想”
 ''';
 
+  @visibleForTesting
+  Future<String> loadAnalysisSystemPromptForTest() =>
+      _loadAnalysisSystemPrompt();
+
+  @visibleForTesting
+  Future<String> loadExtractionSystemPromptForTest() =>
+      _loadExtractionSystemPrompt();
+
   Future<String> _loadAnalysisSystemPrompt() async {
     final custom = await settingsRepository.getString('system_prompt');
-    return custom?.isNotEmpty == true ? custom! : _defaultAnalysisSystemPrompt;
+    final trimmed = custom?.trim() ?? '';
+    if (trimmed.isEmpty) return _defaultAnalysisSystemPrompt;
+    return '$_defaultAnalysisSystemPrompt\n\n补充教学与讲解偏好（必须严格保留上方所有 JSON 字段名、结构与 LaTeX 格式规范）：\n$trimmed';
   }
 
   Future<String> _loadExtractionSystemPrompt() async {
     final custom =
         await settingsRepository.getString('extraction_system_prompt');
-    return custom?.isNotEmpty == true
-        ? custom!
-        : _defaultExtractionSystemPrompt;
+    final trimmed = custom?.trim() ?? '';
+    if (trimmed.isEmpty) return _defaultExtractionSystemPrompt;
+    return '$_defaultExtractionSystemPrompt\n\n补充教学与讲解偏好（必须严格保留上方所有 JSON 字段名、结构与 LaTeX 格式规范）：\n$trimmed';
   }
 
   String _buildExtractionPrompt({

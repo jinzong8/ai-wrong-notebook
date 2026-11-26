@@ -22,10 +22,14 @@ import 'package:uuid/uuid.dart';
 
 /// Checks AI service configuration and navigates straight into the integrated
 /// camera + free-crop screen, skipping any intermediate camera/gallery modal.
+///
+/// When [retakeTarget] is provided, the screen enters retake/replace mode and
+/// preserves the target's cancellation route and replacement identity.
 Future<void> openCameraCaptureFlow(
   BuildContext context,
   WidgetRef ref, {
   String returnRoute = '/',
+  RetakeCaptureTarget? retakeTarget,
 }) async {
   final router = GoRouter.maybeOf(context);
   final messenger = ScaffoldMessenger.maybeOf(context);
@@ -55,7 +59,9 @@ Future<void> openCameraCaptureFlow(
     return;
   }
 
-  ref.read(captureReturnRouteProvider.notifier).state = returnRoute;
+  ref.read(retakeCaptureTargetProvider.notifier).state = retakeTarget;
+  ref.read(captureReturnRouteProvider.notifier).state =
+      retakeTarget?.returnRoute ?? returnRoute;
   router?.go('/capture/camera');
 }
 
@@ -149,6 +155,7 @@ class _CameraCaptureCropScreenState
 
   File? _capturedFile;
   bool _capturedFileOwnedTemp = false;
+  RetakeCaptureTarget? _retakeTarget;
   String? _existingRecordId;
   Subject _subject = Subject.unknown;
   ui.Image? _capturedImage;
@@ -168,6 +175,9 @@ class _CameraCaptureCropScreenState
   @override
   void initState() {
     super.initState();
+    _retakeTarget = ref.read(retakeCaptureTargetProvider);
+    _existingRecordId = _retakeTarget?.replaceQuestionId;
+    _subject = _retakeTarget?.subject ?? Subject.unknown;
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initCamera();
@@ -262,8 +272,8 @@ class _CameraCaptureCropScreenState
         rawFile,
         ownedTemp: true,
         fromLiveViewfinder: true,
-        existingRecordId: null,
-        subject: Subject.unknown,
+        existingRecordId: _retakeTarget?.replaceQuestionId,
+        subject: _retakeTarget?.subject ?? Subject.unknown,
       );
     } catch (e) {
       _deleteTempFileIfOwned(rawFile, true);
@@ -335,7 +345,7 @@ class _CameraCaptureCropScreenState
     _capturedImage = null;
     _capturedFile = null;
     _capturedFileOwnedTemp = false;
-    _existingRecordId = null;
+    _existingRecordId = _retakeTarget?.replaceQuestionId;
     _deleteTempFileIfOwned(oldFile, oldOwned);
 
     final session = _session;
@@ -422,12 +432,28 @@ class _CameraCaptureCropScreenState
 
       final record = result.record;
       if (record != null) {
+        var isReferencedBySaved = false;
+        if (record.imagePath.isNotEmpty) {
+          try {
+            final savedQuestions =
+                await ref.read(questionRepositoryProvider).listAll();
+            isReferencedBySaved = savedQuestions
+                .any((question) => question.imagePath == record.imagePath);
+          } catch (_) {}
+        }
+        if (!mounted) {
+          _deleteTempFileIfOwned(
+            File(record.imagePath),
+            !isReferencedBySaved,
+          );
+          return;
+        }
         await _enterCropWithFile(
           File(record.imagePath),
-          ownedTemp: false,
+          ownedTemp: !isReferencedBySaved,
           fromLiveViewfinder: false,
-          existingRecordId: record.id,
-          subject: record.subject,
+          existingRecordId: _retakeTarget?.replaceQuestionId ?? record.id,
+          subject: _retakeTarget?.subject ?? record.subject,
         );
       }
     } catch (e) {
@@ -503,7 +529,7 @@ class _CameraCaptureCropScreenState
               isEffectivelyFullCrop(_cropRect));
       if (useOriginal) {
         savedPath =
-            _capturedFileOwnedTemp ? await storage.saveImage(file) : file.path;
+            _fromLiveViewfinder ? await storage.saveImage(file) : file.path;
       } else {
         final jpgBytes = await cropAndEncodeJpg(
           sourceImage: image,
@@ -522,19 +548,57 @@ class _CameraCaptureCropScreenState
 
       if (!mounted) return;
 
+      final retakeTarget = _retakeTarget;
+      final isInPlaceReplace = retakeTarget?.isInPlaceReplace == true;
+
+      if (isInPlaceReplace) {
+        try {
+          final existing = await ref
+              .read(questionRepositoryProvider)
+              .getById(retakeTarget!.replaceQuestionId!);
+          if (existing != null) {
+            await ref
+                .read(scanTaskLifecycleServiceProvider)
+                .prepareRetry(existing);
+          }
+        } catch (_) {}
+      } else if (retakeTarget?.discardScanTaskQuestion != null) {
+        try {
+          await ref
+              .read(scanTaskLifecycleServiceProvider)
+              .discard(retakeTarget!.discardScanTaskQuestion!);
+          ref.invalidate(scanTaskCountProvider);
+        } catch (_) {}
+        ref.read(captureReturnRouteProvider.notifier).state = '/';
+      }
+
+      if (!mounted) return;
+
       final record = QuestionRecord.draft(
-        id: _existingRecordId ?? const Uuid().v4(),
+        id: isInPlaceReplace
+            ? retakeTarget!.replaceQuestionId!
+            : (_existingRecordId ?? const Uuid().v4()),
         imagePath: savedPath,
         subject: _subject,
         recognizedText: '',
       ).copyWith(contentStatus: ContentStatus.processing);
+      ref.read(retakeCaptureTargetProvider.notifier).state = null;
       ref.read(currentQuestionProvider.notifier).state = record;
+
+      if (_capturedFileOwnedTemp) {
+        if (file.path != savedPath) {
+          _deleteTempFileIfOwned(file, true);
+        }
+        _capturedFileOwnedTemp = false;
+      }
 
       final session = _session;
       _session = null;
       await session?.dispose();
       if (!mounted) return;
-      context.go('/analysis/loading');
+      context.go(
+        isInPlaceReplace ? '/analysis/loading?reanalysis=1' : '/analysis/loading',
+      );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -544,6 +608,12 @@ class _CameraCaptureCropScreenState
     } finally {
       _deleteTempFileIfOwned(croppedTempFile, true);
     }
+  }
+
+  void _exitCapture() {
+    final target = _retakeTarget;
+    ref.read(retakeCaptureTargetProvider.notifier).state = null;
+    context.go(target?.returnRoute ?? ref.read(captureReturnRouteProvider));
   }
 
   void _deleteTempFileIfOwned(File? file, bool owned) {
@@ -558,6 +628,7 @@ class _CameraCaptureCropScreenState
     const surfaceBg = Color(0xFF0E1117);
     const barBg = Color(0xFF161B22);
     final isCropping = _stage == _CaptureStage.cropping;
+    final isRetakeMode = _retakeTarget != null;
 
     return AppBackScope(
       enabled: isCropping ? !_saving : !_capturing,
@@ -566,7 +637,7 @@ class _CameraCaptureCropScreenState
         if (isCropping) {
           _retake();
         } else {
-          context.go(ref.read(captureReturnRouteProvider));
+          _exitCapture();
         }
       },
       child: Scaffold(
@@ -580,7 +651,9 @@ class _CameraCaptureCropScreenState
           systemOverlayStyle: SystemUiOverlayStyle.light,
           elevation: 0,
           title: Text(
-            isCropping ? '框选题目' : '拍照框选',
+            isRetakeMode
+                ? (isCropping ? '重拍框选' : '重新拍照')
+                : (isCropping ? '框选题目' : '拍照框选'),
             style: const TextStyle(color: Colors.white),
           ),
           leading: isCropping
@@ -602,9 +675,7 @@ class _CameraCaptureCropScreenState
                   key: const Key('camera-back-button'),
                   tooltip: '返回',
                   icon: const Icon(CupertinoIcons.xmark, color: Colors.white),
-                  onPressed: _capturing
-                      ? null
-                      : () => context.go(ref.read(captureReturnRouteProvider)),
+                  onPressed: _capturing ? null : _exitCapture,
                 ),
           leadingWidth: isCropping ? 88 : 56,
           actions: <Widget>[
@@ -672,6 +743,12 @@ class _CameraCaptureCropScreenState
 
   String _buildHintText(bool isCropping) {
     if (!isCropping) {
+      if (_retakeTarget?.isInPlaceReplace == true) {
+        return '重新对准题目拍照，确认后将原地替换原图并重新解析';
+      }
+      if (_retakeTarget != null) {
+        return '重新对准题目拍照，确认后将替换原识别结果';
+      }
       return '将题目对准中间框拍照，拍完按此范围框选并可微调';
     }
     if (_cropPolygon != null) {

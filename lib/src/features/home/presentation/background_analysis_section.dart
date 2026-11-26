@@ -235,38 +235,9 @@ class _TaskTile extends StatelessWidget {
     return '已完成 $completed/${progress.totalUnits}，正在解析第 $current 题';
   }
 
-  bool get _hasPartialFailures {
-    final summary = _candidateSummary;
-    if (summary != null) return summary.failed > 0;
-    final progress = task.job.progress;
-    return task.job.status == AnalysisJobStatus.completed &&
-        progress != null &&
-        progress.totalUnits > 1 &&
-        progress.failedUnits > 0;
-  }
+  bool get _hasPartialFailures => _taskHasPartialFailures(task);
 
-  _CandidateSummary? get _candidateSummary {
-    final candidates = task.resultQuestion?.candidateAnalyses ?? const [];
-    if (candidates.length <= 1) return null;
-    CandidateAnalysisSnapshot? retrying;
-    for (final candidate in candidates) {
-      if (candidate.status == CandidateAnalysisStatus.queued ||
-          candidate.status == CandidateAnalysisStatus.running) {
-        retrying = candidate;
-        break;
-      }
-    }
-    return _CandidateSummary(
-      total: candidates.length,
-      successful:
-          candidates.where((candidate) => candidate.isSuccessful).length,
-      failed: candidates
-          .where(
-              (candidate) => candidate.status == CandidateAnalysisStatus.failed)
-          .length,
-      retryingCandidate: retrying,
-    );
-  }
+  _CandidateSummary? get _candidateSummary => _candidateSummaryFor(task);
 
   Color _statusColor(EditorialPalette p) {
     final isRetrying = _candidateSummary?.retryingCandidate != null;
@@ -277,6 +248,39 @@ class _TaskTile extends StatelessWidget {
       _ => p.inkSecondary,
     };
   }
+}
+
+_CandidateSummary? _candidateSummaryFor(QuestionAnalysisTaskSnapshot task) {
+  final candidates = task.resultQuestion?.candidateAnalyses ?? const [];
+  if (candidates.length <= 1) return null;
+  CandidateAnalysisSnapshot? retrying;
+  for (final candidate in candidates) {
+    if (candidate.status == CandidateAnalysisStatus.queued ||
+        candidate.status == CandidateAnalysisStatus.running) {
+      retrying = candidate;
+      break;
+    }
+  }
+  return _CandidateSummary(
+    total: candidates.length,
+    successful:
+        candidates.where((candidate) => candidate.isSuccessful).length,
+    failed: candidates
+        .where(
+            (candidate) => candidate.status == CandidateAnalysisStatus.failed)
+        .length,
+    retryingCandidate: retrying,
+  );
+}
+
+bool _taskHasPartialFailures(QuestionAnalysisTaskSnapshot task) {
+  if (task.job.status != AnalysisJobStatus.completed) return false;
+  final summary = _candidateSummaryFor(task);
+  if (summary != null) return summary.failed > 0;
+  final progress = task.job.progress;
+  return progress != null &&
+      progress.totalUnits > 1 &&
+      progress.failedUnits > 0;
 }
 
 class _CandidateSummary {
@@ -356,12 +360,7 @@ class _StatusIcon extends StatelessWidget {
         ),
       );
     }
-    final progress = task.job.progress;
-    final hasPartialFailures = status == AnalysisJobStatus.completed &&
-        progress != null &&
-        progress.totalUnits > 1 &&
-        progress.failedUnits > 0;
-    if (hasPartialFailures) {
+    if (_taskHasPartialFailures(task)) {
       return Icon(
         CupertinoIcons.exclamationmark_circle_fill,
         size: 26,

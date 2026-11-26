@@ -3,10 +3,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:smart_wrong_notebook/src/app/providers.dart';
+import 'package:smart_wrong_notebook/src/common/widgets/editorial_surface.dart';
 import 'package:smart_wrong_notebook/src/domain/models/mastery_level.dart';
 import 'package:smart_wrong_notebook/src/domain/models/question_record.dart';
 import 'package:smart_wrong_notebook/src/domain/models/subject.dart';
 import 'package:smart_wrong_notebook/src/features/capture/presentation/camera_capture_crop_screen.dart';
+import 'package:smart_wrong_notebook/src/shared/utils/local_date_utils.dart';
 import 'package:smart_wrong_notebook/src/shared/widgets/math_content_view.dart';
 
 class NotebookScreen extends ConsumerStatefulWidget {
@@ -20,12 +22,22 @@ class _NotebookScreenState extends ConsumerState<NotebookScreen> {
   final _searchController = TextEditingController();
 
   @override
+  void initState() {
+    super.initState();
+    _searchController.text = ref.read(searchQueryProvider);
+  }
+
+  @override
   void dispose() {
     _searchController.dispose();
     super.dispose();
   }
 
-  void _confirmDelete(BuildContext context, WidgetRef ref, dynamic question) {
+  void _confirmDelete(
+    BuildContext context,
+    WidgetRef ref,
+    QuestionRecord question,
+  ) {
     showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -47,20 +59,111 @@ class _NotebookScreenState extends ConsumerState<NotebookScreen> {
     );
   }
 
+  PopupMenuItem<NotebookSortOrder> _buildSortMenuItem(
+    BuildContext context,
+    NotebookSortOrder value,
+    String label,
+    NotebookSortOrder selected,
+  ) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final isSelected = value == selected;
+    return PopupMenuItem<NotebookSortOrder>(
+      value: value,
+      child: Row(
+        children: <Widget>[
+          Expanded(
+            child: Text(
+              label,
+              style: TextStyle(
+                fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                color: isSelected ? colorScheme.primary : colorScheme.onSurface,
+              ),
+            ),
+          ),
+          if (isSelected)
+            Icon(
+              CupertinoIcons.checkmark,
+              size: 16,
+              color: colorScheme.primary,
+            ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    final searchQuery = ref.watch(searchQueryProvider);
+    ref.listen<String>(searchQueryProvider, (prev, next) {
+      if (next != _searchController.text) {
+        _searchController.value = TextEditingValue(
+          text: next,
+          selection: TextSelection.collapsed(offset: next.length),
+        );
+      }
+    });
+
+    final selectedSort = ref.watch(selectedNotebookSortProvider);
+    final allQuestions =
+        ref.watch(questionListProvider).valueOrNull ?? const <QuestionRecord>[];
     final questionsAsync = ref.watch(filteredQuestionListProvider);
     final selectedSubject = ref.watch(selectedSubjectFilterProvider);
     final selectedMastery = ref.watch(selectedMasteryFilterProvider);
     final selectedCreatedToday = ref.watch(selectedCreatedTodayFilterProvider);
     final selectedKnowledgePoint =
         ref.watch(selectedKnowledgePointFilterProvider);
+    final selectedTags = ref.watch(selectedTagsFilterProvider);
+
+    final subjectCounts = <Subject, int>{};
+    for (final q in allQuestions) {
+      subjectCounts[q.subject] = (subjectCounts[q.subject] ?? 0) + 1;
+    }
+    final visibleSubjects = allQuestions.isEmpty
+        ? Subject.selectableValues
+        : (Subject.selectableValues
+            .where((s) => (subjectCounts[s] ?? 0) > 0 || selectedSubject == s)
+            .toList()
+          ..sort((a, b) {
+            final countCmp =
+                (subjectCounts[b] ?? 0).compareTo(subjectCounts[a] ?? 0);
+            if (countCmp != 0) return countCmp;
+            return a.index.compareTo(b.index);
+          }));
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('错题本'),
         actions: [
+          PopupMenuButton<NotebookSortOrder>(
+            key: const Key('notebook-sort-button'),
+            tooltip: '排序',
+            initialValue: selectedSort,
+            icon: const Icon(CupertinoIcons.arrow_up_arrow_down),
+            onSelected: (order) {
+              ref.read(selectedNotebookSortProvider.notifier).state = order;
+            },
+            itemBuilder: (context) => <PopupMenuEntry<NotebookSortOrder>>[
+              _buildSortMenuItem(
+                context,
+                NotebookSortOrder.newestFirst,
+                '最新录入',
+                selectedSort,
+              ),
+              _buildSortMenuItem(
+                context,
+                NotebookSortOrder.oldestFirst,
+                '最早录入',
+                selectedSort,
+              ),
+              _buildSortMenuItem(
+                context,
+                NotebookSortOrder.mostReviewed,
+                '复习最多',
+                selectedSort,
+              ),
+            ],
+          ),
           IconButton(
             icon: const Icon(CupertinoIcons.camera),
             onPressed: () => openCameraCaptureFlow(
@@ -82,15 +185,17 @@ class _NotebookScreenState extends ConsumerState<NotebookScreen> {
               decoration: InputDecoration(
                 hintText: '搜索错题',
                 prefixIcon: const Icon(CupertinoIcons.search, size: 20),
-                suffixIcon: _searchController.text.isNotEmpty
-                    ? IconButton(
-                        icon: const Icon(CupertinoIcons.xmark_circle, size: 18),
-                        onPressed: () {
-                          _searchController.clear();
-                          ref.read(searchQueryProvider.notifier).state = '';
-                        },
-                      )
-                    : null,
+                suffixIcon:
+                    (searchQuery.isNotEmpty || _searchController.text.isNotEmpty)
+                        ? IconButton(
+                            icon: const Icon(CupertinoIcons.xmark_circle,
+                                size: 18),
+                            onPressed: () {
+                              _searchController.clear();
+                              ref.read(searchQueryProvider.notifier).state = '';
+                            },
+                          )
+                        : null,
                 contentPadding: const EdgeInsets.symmetric(vertical: 0),
                 filled: true,
                 fillColor: colorScheme.surface,
@@ -110,7 +215,6 @@ class _NotebookScreenState extends ConsumerState<NotebookScreen> {
               ),
               onChanged: (v) {
                 ref.read(searchQueryProvider.notifier).state = v;
-                setState(() {});
               },
             ),
           ),
@@ -121,11 +225,13 @@ class _NotebookScreenState extends ConsumerState<NotebookScreen> {
             child: Row(
               children: <Widget>[
                 _Chip(
+                  key: const Key('notebook-filter-all'),
                   label: '全部',
                   selected: selectedSubject == null &&
                       selectedMastery == null &&
                       !selectedCreatedToday &&
-                      selectedKnowledgePoint == null,
+                      selectedKnowledgePoint == null &&
+                      selectedTags.isEmpty,
                   onTap: () {
                     ref.read(selectedSubjectFilterProvider.notifier).state =
                         null;
@@ -137,6 +243,8 @@ class _NotebookScreenState extends ConsumerState<NotebookScreen> {
                     ref
                         .read(selectedKnowledgePointFilterProvider.notifier)
                         .state = null;
+                    ref.read(selectedTagsFilterProvider.notifier).state =
+                        <String>[];
                   },
                 ),
                 const SizedBox(width: 8),
@@ -152,33 +260,9 @@ class _NotebookScreenState extends ConsumerState<NotebookScreen> {
                   ),
                   const SizedBox(width: 8),
                 ],
-                if (selectedMastery != null) ...<Widget>[
-                  _Chip(
-                    label: _masteryFilterLabel(selectedMastery),
-                    selected: true,
-                    onTap: () {
-                      ref.read(selectedMasteryFilterProvider.notifier).state =
-                          null;
-                    },
-                  ),
-                  const SizedBox(width: 8),
-                ],
-                ...Subject.selectableValues.map((s) => Padding(
-                      padding: const EdgeInsets.only(right: 8),
-                      child: _Chip(
-                        label: s.label,
-                        selected: selectedSubject == s,
-                        onTap: () {
-                          ref
-                              .read(selectedSubjectFilterProvider.notifier)
-                              .state = selectedSubject == s ? null : s;
-                        },
-                      ),
-                    )),
-                // AI 知识点过滤
                 if (selectedKnowledgePoint != null) ...<Widget>[
-                  const SizedBox(width: 8),
                   _Chip(
+                    key: const Key('notebook-active-kp-chip'),
                     label: '📚 $selectedKnowledgePoint',
                     selected: true,
                     onTap: () {
@@ -187,7 +271,48 @@ class _NotebookScreenState extends ConsumerState<NotebookScreen> {
                           .state = null;
                     },
                   ),
+                  const SizedBox(width: 8),
                 ],
+                ...selectedTags.map(
+                  (tag) => Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: _Chip(
+                      label: '# $tag',
+                      selected: true,
+                      onTap: () {
+                        ref.read(selectedTagsFilterProvider.notifier).state =
+                            selectedTags.where((item) => item != tag).toList();
+                      },
+                    ),
+                  ),
+                ),
+                ...visibleSubjects.map((s) => Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: _Chip(
+                        key: Key('notebook-subject-chip-${s.name}'),
+                        label: s.label,
+                        count: subjectCounts[s],
+                        selected: selectedSubject == s,
+                        onTap: () {
+                          ref
+                              .read(selectedSubjectFilterProvider.notifier)
+                              .state = selectedSubject == s ? null : s;
+                        },
+                      ),
+                    )),
+                ...MasteryLevel.values.map((level) => Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: _Chip(
+                        key: Key('notebook-mastery-chip-${level.name}'),
+                        label: _masteryFilterLabel(level),
+                        selected: selectedMastery == level,
+                        onTap: () {
+                          ref
+                              .read(selectedMasteryFilterProvider.notifier)
+                              .state = selectedMastery == level ? null : level;
+                        },
+                      ),
+                    )),
               ],
             ),
           ),
@@ -210,7 +335,7 @@ class _NotebookScreenState extends ConsumerState<NotebookScreen> {
                             style: TextStyle(
                                 fontSize: 16, color: colorScheme.onSurface)),
                         const SizedBox(height: 8),
-                        Text('点击 + 拍照添加',
+                        Text('点击右上角相机图标拍照录题',
                             style: TextStyle(
                                 fontSize: 13,
                                 color: colorScheme.onSurfaceVariant)),
@@ -220,7 +345,7 @@ class _NotebookScreenState extends ConsumerState<NotebookScreen> {
                 }
                 return RefreshIndicator(
                   onRefresh: () async {
-                    ref.invalidate(questionListProvider);
+                    invalidateQuestionList(ref);
                   },
                   child: ListView.builder(
                     padding:
@@ -232,6 +357,9 @@ class _NotebookScreenState extends ConsumerState<NotebookScreen> {
                         child: _QuestionCard(
                           question: q,
                           onTap: () {
+                            ref
+                                .read(activeReviewSessionProvider.notifier)
+                                .state = null;
                             ref.read(currentQuestionProvider.notifier).state =
                                 q;
                             ref
@@ -268,23 +396,30 @@ class _NotebookScreenState extends ConsumerState<NotebookScreen> {
 
 String _masteryFilterLabel(MasteryLevel level) {
   return switch (level) {
-    MasteryLevel.newQuestion => '新题',
+    MasteryLevel.newQuestion => '新收录',
     MasteryLevel.reviewing => '复习中',
     MasteryLevel.mastered => '已掌握',
   };
 }
 
 class _Chip extends StatelessWidget {
-  const _Chip(
-      {required this.label, required this.selected, required this.onTap});
+  const _Chip({
+    super.key,
+    required this.label,
+    this.count,
+    required this.selected,
+    required this.onTap,
+  });
 
   final String label;
+  final int? count;
   final bool selected;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    final fg = selected ? colorScheme.onPrimary : colorScheme.onSurfaceVariant;
 
     return GestureDetector(
       onTap: onTap,
@@ -296,14 +431,32 @@ class _Chip extends StatelessWidget {
               : colorScheme.surfaceContainerHighest,
           borderRadius: BorderRadius.circular(16),
         ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 13,
-            color:
-                selected ? colorScheme.onPrimary : colorScheme.onSurfaceVariant,
-          ),
-        ),
+        child: count != null && count! > 0
+            ? Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Text(
+                    label,
+                    style: TextStyle(fontSize: 13, color: fg),
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    '$count',
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w600,
+                      color: fg.withValues(alpha: selected ? 0.9 : 0.72),
+                    ),
+                  ),
+                ],
+              )
+            : Text(
+                label,
+                style: TextStyle(
+                  fontSize: 13,
+                  color: fg,
+                ),
+              ),
       ),
     );
   }
@@ -317,7 +470,7 @@ class _QuestionCard extends StatelessWidget {
     required this.onKnowledgePointTap,
   });
 
-  final dynamic question;
+  final QuestionRecord question;
   final VoidCallback onTap;
   final VoidCallback onDelete;
   final void Function(String knowledgePoint) onKnowledgePointTap;
@@ -327,8 +480,8 @@ class _QuestionCard extends StatelessWidget {
     final colorScheme = Theme.of(context).colorScheme;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final masteryColor = _masteryColor(context, question.masteryLevel);
-    final aiTags = question.aiTags ?? <String>[];
-    final customTags = question.customTags ?? <String>[];
+    final aiTags = question.aiTags;
+    final customTags = question.customTags;
     final allTags = [...aiTags, ...customTags];
 
     return Dismissible(
@@ -380,30 +533,21 @@ class _QuestionCard extends StatelessWidget {
                       color: question.subject.color.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(22),
                     ),
-                    child: Hero(
-                      tag: 'subject_icon_${question.id}',
-                      child: Icon(question.subject.icon,
-                          size: 20, color: question.subject.color),
-                    ),
+                    child: Icon(question.subject.icon,
+                        size: 20, color: question.subject.color),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: <Widget>[
-                        Hero(
-                          tag: 'question_text_${question.id}',
-                          child: Material(
-                            color: Colors.transparent,
-                            child: MathContentView(
-                              question.correctedText,
-                              contentFormat: question.contentFormat,
-                              mode: MathContentViewMode.compact,
-                              maxLines: 1,
-                              style: const TextStyle(
-                                  fontWeight: FontWeight.w500, fontSize: 14),
-                            ),
-                          ),
+                        MathContentView(
+                          question.correctedText,
+                          contentFormat: question.contentFormat,
+                          mode: MathContentViewMode.compact,
+                          maxLines: 1,
+                          style: const TextStyle(
+                              fontWeight: FontWeight.w500, fontSize: 14),
                         ),
                         const SizedBox(height: 4),
                         Row(
@@ -497,37 +641,21 @@ class _QuestionCard extends StatelessWidget {
     );
   }
 
-  String _formatDate(DateTime date) {
-    final now = DateTime.now();
-    final diff = now.difference(date);
-    if (diff.inDays == 0) return '今天';
-    if (diff.inDays == 1) return '昨天';
-    if (diff.inDays < 7) return '${diff.inDays}天前';
-    return '${date.month}月${date.day}日';
-  }
+  String _formatDate(DateTime date) => formatRelativeLocalDate(date);
 
   Color _masteryColor(BuildContext context, MasteryLevel level) {
-    final colorScheme = Theme.of(context).colorScheme;
+    final p = EditorialPalette.of(context);
     switch (level) {
       case MasteryLevel.newQuestion:
-        return colorScheme.onSurfaceVariant;
+        return p.inkSecondary;
       case MasteryLevel.reviewing:
-        return const Color(0xFFD97706);
+        return p.ochre;
       case MasteryLevel.mastered:
-        return const Color(0xFF16A34A);
+        return p.emerald;
     }
   }
 
-  String _masteryLabel(MasteryLevel level) {
-    switch (level) {
-      case MasteryLevel.newQuestion:
-        return '新增';
-      case MasteryLevel.reviewing:
-        return '复习中';
-      case MasteryLevel.mastered:
-        return '已掌握';
-    }
-  }
+  String _masteryLabel(MasteryLevel level) => _masteryFilterLabel(level);
 
   String? _batchLabel(QuestionRecord question) {
     if (question.parentQuestionId == null && question.rootQuestionId == null) {

@@ -8,6 +8,7 @@ import 'package:smart_wrong_notebook/src/app/providers.dart';
 import 'package:smart_wrong_notebook/src/common/widgets/app_back_scope.dart';
 import 'package:smart_wrong_notebook/src/common/widgets/editorial_surface.dart';
 import 'package:smart_wrong_notebook/src/domain/models/question_record.dart';
+import 'package:smart_wrong_notebook/src/features/capture/presentation/camera_capture_crop_screen.dart';
 
 class QuestionTextCorrectionScreen extends ConsumerStatefulWidget {
   const QuestionTextCorrectionScreen({
@@ -51,6 +52,29 @@ class _QuestionTextCorrectionScreenState
     } else {
       context.go('/analysis/result');
     }
+  }
+
+  Future<void> _openRetakeCapture(QuestionRecord record) async {
+    FocusManager.instance.primaryFocus?.unfocus();
+    ref.read(currentQuestionProvider.notifier).state = record;
+    await openCameraCaptureFlow(
+      context,
+      ref,
+      returnRoute: widget.returnToDetail
+          ? '/notebook/question/${record.id}'
+          : '/analysis/result',
+      retakeTarget: widget.returnToDetail
+          ? RetakeCaptureTarget(
+              returnRoute: '/notebook/question/${record.id}',
+              replaceQuestionId: record.id,
+              subject: record.subject,
+            )
+          : RetakeCaptureTarget(
+              returnRoute: '/analysis/result',
+              discardScanTaskQuestion: record,
+              subject: record.subject,
+            ),
+    );
   }
 
   @override
@@ -140,6 +164,25 @@ class _QuestionTextCorrectionScreenState
                             title: '修正题干与条件',
                             icon: CupertinoIcons.pencil,
                             iconColor: p.cobalt,
+                            trailing: TextButton.icon(
+                              key: const Key('text-correction-retake-button'),
+                              onPressed: _submitting
+                                  ? null
+                                  : () => _openRetakeCapture(record),
+                              icon: const Icon(CupertinoIcons.camera, size: 15),
+                              label: const Text('图片不清？重拍'),
+                              style: TextButton.styleFrom(
+                                visualDensity: VisualDensity.compact,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 4,
+                                ),
+                                textStyle: const TextStyle(
+                                  fontSize: 12.5,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
                           ),
                           const SizedBox(height: 6),
                           Text(
@@ -227,7 +270,7 @@ class _QuestionTextCorrectionScreenState
       setState(() => _errorText = '题干不能为空');
       return;
     }
-    if (correctedText == record.correctedText.trim()) {
+    if (!widget.returnToDetail && correctedText == record.correctedText.trim()) {
       setState(() => _errorText = '请补正或补充题干后再重新解析');
       return;
     }

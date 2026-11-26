@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -410,13 +411,17 @@ void main() {
       ));
       await tester.pumpAndSettle();
 
-      // Detail screen offers 核对题干后重新解析 right on the needsReview answer card!
-      expect(find.text('核对题干后重新解析'), findsOneWidget);
-      await tester.ensureVisible(find.text('核对题干后重新解析'));
-      await tester.tap(find.text('核对题干后重新解析'));
+      // Detail screen offers both 重新拍照 and 修改题干 on the needsReview answer card!
+      expect(find.byKey(const Key('detail-retake-button')), findsOneWidget);
+      expect(find.text('重新拍照'), findsOneWidget);
+      expect(find.byKey(const Key('detail-edit-text-button')), findsOneWidget);
+      expect(find.text('修改题干'), findsOneWidget);
+      await tester.ensureVisible(find.text('修改题干'));
+      await tester.tap(find.text('修改题干'));
       await tester.pumpAndSettle();
 
       expect(find.text('核对题干'), findsOneWidget);
+      expect(find.text('图片不清？重拍'), findsOneWidget);
       await tester.enterText(find.byType(TextField), '正方形边长为 5，求面积');
       await tester.tap(find.text('重新解析'));
       await tester.pump();
@@ -432,6 +437,155 @@ void main() {
       expect(allSaved.single.correctedText, '正方形边长为 5，求面积');
       expect(allSaved.single.customTags, <String>['错题标注']);
       expect(allSaved.single.splitOrder, isNull);
+    });
+
+    testWidgets(
+        'needsReview detail 重新拍照 opens camera in in-place replace mode and overflow menu also exposes retake',
+        (tester) async {
+      final repo = InMemoryQuestionRepository();
+      final settingsRepo = _ConfiguredSettingsRepository();
+      final initial = QuestionRecord.draft(
+        id: 'q-retake-detail-1',
+        imagePath: '',
+        subject: Subject.math,
+        recognizedText: '不等式组 D 选项被裁断',
+      ).copyWith(
+        contentStatus: ContentStatus.ready,
+        analysisResult: const AnalysisResult(
+          subject: Subject.math,
+          finalAnswer: 'a >= 2',
+          steps: <String>['解不等式得 x > 2'],
+          aiTags: <String>['不等式组'],
+          knowledgePoints: <String>['公共解集'],
+          mistakeReason: 'D 选项被截断',
+          studyAdvice: '核对 D 选项完整内容',
+          consistencyStatus: AnalysisConsistencyStatus.needsReview,
+          consistencyNote: '如需确定选项字母，应核对 D 选项的完整内容。',
+          visualAssumptionStatus: VisualAssumptionStatus.needsReview,
+        ),
+      );
+      await repo.saveDraft(initial);
+
+      final container = ProviderContainer(
+        overrides: <Override>[
+          questionRepositoryProvider.overrideWithValue(repo),
+          settingsRepositoryProvider.overrideWithValue(settingsRepo),
+        ],
+      );
+      addTearDown(container.dispose);
+      container.read(currentQuestionProvider.notifier).state = initial;
+
+      final router = GoRouter(
+        initialLocation: '/notebook/question/q-retake-detail-1',
+        routes: <RouteBase>[
+          GoRoute(
+            path: '/notebook/question/:id',
+            builder: (_, __) => const QuestionDetailScreen(),
+          ),
+          GoRoute(
+            path: '/capture/camera',
+            builder: (_, __) => const Scaffold(body: Text('CAMERA_RETAKE')),
+          ),
+        ],
+      );
+      addTearDown(router.dispose);
+
+      await tester.pumpWidget(UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp.router(routerConfig: router),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.ensureVisible(find.byKey(const Key('detail-retake-button')));
+      await tester.tap(find.byKey(const Key('detail-retake-button')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('CAMERA_RETAKE'), findsOneWidget);
+      final target = container.read(retakeCaptureTargetProvider);
+      expect(target, isNotNull);
+      expect(target!.isInPlaceReplace, isTrue);
+      expect(target.replaceQuestionId, 'q-retake-detail-1');
+      expect(target.returnRoute, '/notebook/question/q-retake-detail-1');
+      expect(target.subject, Subject.math);
+    });
+
+    test(
+        'autoSaveSingleQuestion deletes replaced orphaned image but preserves shared batch image',
+        () async {
+      final tempDir = Directory.systemTemp.createTempSync('retake_cleanup_');
+      try {
+        final oldStandalone = File('${tempDir.path}/old_standalone.jpg')
+          ..writeAsBytesSync(<int>[1, 2, 3]);
+        final newStandalone = File('${tempDir.path}/new_standalone.jpg')
+          ..writeAsBytesSync(<int>[4, 5, 6]);
+        final sharedBatch = File('${tempDir.path}/shared_batch.jpg')
+          ..writeAsBytesSync(<int>[7, 8, 9]);
+        final newSibling = File('${tempDir.path}/new_sibling.jpg')
+          ..writeAsBytesSync(<int>[10, 11, 12]);
+
+        final repo = InMemoryQuestionRepository();
+        final originalTime = DateTime(2026, 11, 20, 14, 30);
+
+        final standalone = QuestionRecord.fromJson(<String, dynamic>{
+          ...QuestionRecord.draft(
+            id: 'q-solo',
+            imagePath: oldStandalone.path,
+            subject: Subject.math,
+            recognizedText: '旧图题目',
+          ).toJson(),
+          'createdAt': originalTime.toIso8601String(),
+          'customTags': <String>['重点'],
+          'reviewCount': 3,
+        });
+        await repo.saveDraft(standalone);
+
+        final replacedSolo = await autoSaveSingleQuestion(
+          analyzed: QuestionRecord.draft(
+            id: 'q-solo',
+            imagePath: newStandalone.path,
+            subject: Subject.math,
+            recognizedText: '清晰新图题目',
+          ).copyWith(contentStatus: ContentStatus.ready),
+          repository: repo,
+        );
+
+        expect(replacedSolo.imagePath, newStandalone.path);
+        expect(replacedSolo.createdAt, originalTime);
+        expect(replacedSolo.customTags, <String>['重点']);
+        expect(replacedSolo.reviewCount, 3);
+        expect(oldStandalone.existsSync(), isFalse);
+        expect(newStandalone.existsSync(), isTrue);
+
+        // Shared image between two batch siblings must NOT be deleted when only one sibling is retaken.
+        final sib1 = QuestionRecord.draft(
+          id: 'q-sib-1',
+          imagePath: sharedBatch.path,
+          subject: Subject.math,
+          recognizedText: '子题 1',
+        );
+        final sib2 = QuestionRecord.draft(
+          id: 'q-sib-2',
+          imagePath: sharedBatch.path,
+          subject: Subject.math,
+          recognizedText: '子题 2',
+        );
+        await repo.saveDrafts(<QuestionRecord>[sib1, sib2]);
+
+        await autoSaveSingleQuestion(
+          analyzed: QuestionRecord.draft(
+            id: 'q-sib-1',
+            imagePath: newSibling.path,
+            subject: Subject.math,
+            recognizedText: '子题 1 清晰版',
+          ).copyWith(contentStatus: ContentStatus.ready),
+          repository: repo,
+        );
+
+        expect(sharedBatch.existsSync(), isTrue);
+        expect(newSibling.existsSync(), isTrue);
+      } finally {
+        tempDir.deleteSync(recursive: true);
+      }
     });
   });
 }

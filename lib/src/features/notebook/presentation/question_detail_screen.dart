@@ -14,6 +14,7 @@ import 'package:smart_wrong_notebook/src/domain/models/analysis_result.dart';
 import 'package:smart_wrong_notebook/src/domain/models/analysis_job.dart';
 import 'package:smart_wrong_notebook/src/domain/models/mastery_level.dart';
 import 'package:smart_wrong_notebook/src/domain/models/question_record.dart';
+import 'package:smart_wrong_notebook/src/domain/models/subject.dart';
 import 'package:smart_wrong_notebook/src/domain/services/exercise_round_service.dart';
 import 'package:smart_wrong_notebook/src/features/capture/presentation/camera_capture_crop_screen.dart';
 import 'package:smart_wrong_notebook/src/features/review/presentation/review_controller.dart';
@@ -32,8 +33,61 @@ final _exerciseGenerationJobProvider =
   });
 });
 
-class QuestionDetailScreen extends ConsumerWidget {
+class QuestionDetailScreen extends ConsumerStatefulWidget {
   const QuestionDetailScreen({super.key});
+
+  @override
+  ConsumerState<QuestionDetailScreen> createState() =>
+      _QuestionDetailScreenState();
+}
+
+class _QuestionDetailScreenState extends ConsumerState<QuestionDetailScreen> {
+  final ScrollController _scrollController = ScrollController();
+  String? _revealedAnswerQuestionId;
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  String? _tryRouteQuestionId(BuildContext context) {
+    if (GoRouter.maybeOf(context) == null) return null;
+    try {
+      return GoRouterState.of(context).pathParameters['id'];
+    } catch (_) {
+      return null;
+    }
+  }
+
+  QuestionRecord? _resolveActiveQuestion({
+    required String? routeId,
+    required List<QuestionRecord>? allQuestions,
+    required QuestionRecord? providerCurrent,
+  }) {
+    QuestionRecord? byRouteId;
+    if (routeId != null && allQuestions != null) {
+      for (final item in allQuestions) {
+        if (item.id == routeId) {
+          byRouteId = item;
+          break;
+        }
+      }
+    }
+
+    if (providerCurrent != null &&
+        (routeId == null || providerCurrent.id == routeId)) {
+      if (byRouteId != null &&
+          byRouteId.updatedAt.isAfter(providerCurrent.updatedAt)) {
+        return byRouteId;
+      }
+      return providerCurrent;
+    }
+    if (byRouteId != null) {
+      return byRouteId;
+    }
+    return null;
+  }
 
   bool _shouldOfferQuestionCorrection(AnalysisResult result) {
     return result.visualAssumptionStatus ==
@@ -43,30 +97,153 @@ class QuestionDetailScreen extends ConsumerWidget {
 
   void _openTextCorrection(
     BuildContext context,
-    WidgetRef ref,
     QuestionRecord current,
   ) {
     ref.read(currentQuestionProvider.notifier).state = current;
     context.go('/analysis/text-correction?from=detail');
   }
 
+  Future<void> _openRetakeCapture(
+    BuildContext context,
+    QuestionRecord current,
+  ) async {
+    ref.read(currentQuestionProvider.notifier).state = current;
+    await openCameraCaptureFlow(
+      context,
+      ref,
+      returnRoute: '/notebook/question/${current.id}',
+      retakeTarget: RetakeCaptureTarget(
+        returnRoute: '/notebook/question/${current.id}',
+        replaceQuestionId: current.id,
+        subject: current.subject,
+      ),
+    );
+  }
+
+  void _exitToReturnRoute(BuildContext context, String returnRoute) {
+    ref.read(activeReviewSessionProvider.notifier).state = null;
+    context.go(returnRoute);
+  }
+
+  Future<void> _showEditSubjectSheet(
+    BuildContext context,
+    QuestionRecord current,
+  ) async {
+    final p = EditorialPalette.of(context);
+    final picked = await showModalBottomSheet<Subject>(
+      context: context,
+      showDragHandle: true,
+      backgroundColor: p.card,
+      builder: (sheetCtx) {
+        return SafeArea(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.sizeOf(sheetCtx).height * 0.65,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 4, 20, 10),
+                  child: Text(
+                    '选择科目',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: p.inkPrimary,
+                    ),
+                  ),
+                ),
+                Divider(height: 1, color: p.hairline),
+                Flexible(
+                  child: ListView(
+                    shrinkWrap: true,
+                    children: Subject.selectableValues.map((subject) {
+                      final isSelected = subject == current.subject;
+                      return ListTile(
+                        leading: Container(
+                          width: 32,
+                          height: 32,
+                          decoration: BoxDecoration(
+                            color: subject.color.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Icon(
+                            subject.icon,
+                            size: 17,
+                            color: subject.color,
+                          ),
+                        ),
+                        title: Text(
+                          subject.label,
+                          style: TextStyle(
+                            fontSize: 14.5,
+                            fontWeight:
+                                isSelected ? FontWeight.w600 : FontWeight.w400,
+                            color: isSelected ? p.cobalt : p.inkPrimary,
+                          ),
+                        ),
+                        trailing: isSelected
+                            ? Icon(
+                                CupertinoIcons.checkmark_alt,
+                                size: 18,
+                                color: p.cobalt,
+                              )
+                            : null,
+                        onTap: () => Navigator.pop(sheetCtx, subject),
+                      );
+                    }).toList(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+
+    if (picked == null || picked == current.subject || !mounted) return;
+    final updated = current.copyWith(subject: picked);
+    await ref.read(questionRepositoryProvider).update(updated);
+    ref.read(currentQuestionProvider.notifier).state = updated;
+    invalidateQuestionList(ref);
+  }
+
+  Future<void> _deleteCustomTag(QuestionRecord question, String tag) async {
+    final newTags =
+        question.customTags.where((existing) => existing != tag).toList();
+    final updated = question.copyWith(customTags: newTags);
+    await ref.read(questionRepositoryProvider).update(updated);
+    ref.read(currentQuestionProvider.notifier).state = updated;
+    invalidateQuestionList(ref);
+  }
+
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final current = ref.watch(currentQuestionProvider);
+  Widget build(BuildContext context) {
+    final routeId = _tryRouteQuestionId(context);
+    final allQuestions = ref.watch(questionListProvider).valueOrNull;
+    final providerCurrent = ref.watch(currentQuestionProvider);
+    final current = _resolveActiveQuestion(
+      routeId: routeId,
+      allQuestions: allQuestions,
+      providerCurrent: providerCurrent,
+    );
     final returnRoute = ref.watch(questionDetailReturnRouteProvider);
     final mode = ref.watch(questionDetailModeProvider);
+    final reviewSession = ref.watch(activeReviewSessionProvider);
     final p = EditorialPalette.of(context);
 
     if (current == null) {
       return AppBackScope(
-        onBack: () => context.go(returnRoute),
+        onBack: () => _exitToReturnRoute(context, returnRoute),
         child: Scaffold(
           backgroundColor: p.canvas,
           appBar: AppBar(
             title: const Text('错题详情'),
             leading: IconButton(
               icon: const Icon(CupertinoIcons.chevron_left),
-              onPressed: () => context.go(returnRoute),
+              onPressed: () => _exitToReturnRoute(context, returnRoute),
             ),
           ),
           body: const Center(child: Text('未找到该错题')),
@@ -75,15 +252,18 @@ class QuestionDetailScreen extends ConsumerWidget {
     }
 
     final result = current.analysisResult;
-    final masteryColor = _masteryColor(context, current.masteryLevel);
+    final masteryColor = _masteryColor(p, current.masteryLevel);
     final batchGroups = ref.watch(questionBatchGroupsProvider).valueOrNull;
     final batchGroup = batchGroups?[questionBatchRootId(current)];
     final isNeedsReview =
         result?.visualAssumptionStatus == VisualAssumptionStatus.needsReview;
+    final hideSolutionForActiveRecall = mode == QuestionDetailMode.review &&
+        result != null &&
+        _revealedAnswerQuestionId != current.id;
 
     final Widget? bottomBar = switch (mode) {
       QuestionDetailMode.capture => _CaptureDetailBottomBar(
-          onFinish: () => context.go(returnRoute),
+          onFinish: () => _exitToReturnRoute(context, returnRoute),
           onCaptureNext: () => openCameraCaptureFlow(
             context,
             ref,
@@ -96,14 +276,12 @@ class QuestionDetailScreen extends ConsumerWidget {
               current: current,
               onMarkReviewing: () => _markResult(
                 context,
-                ref,
                 current,
                 false,
                 returnAfterMark: returnRoute,
               ),
               onMarkMastered: () => _markResult(
                 context,
-                ref,
                 current,
                 true,
                 returnAfterMark: returnRoute,
@@ -113,33 +291,48 @@ class QuestionDetailScreen extends ConsumerWidget {
     };
 
     return AppBackScope(
-      onBack: () => context.go(returnRoute),
+      onBack: () => _exitToReturnRoute(context, returnRoute),
       child: Scaffold(
         backgroundColor: p.canvas,
         appBar: AppBar(
-          title: const Text('错题详情'),
+          title: Text(
+            mode == QuestionDetailMode.review && reviewSession != null
+                ? '复习 (${reviewSession.currentIndex + 1}/${reviewSession.totalCount})'
+                : '错题详情',
+          ),
           leading: IconButton(
             icon: const Icon(CupertinoIcons.chevron_left),
-            onPressed: () => context.go(returnRoute),
+            onPressed: () => _exitToReturnRoute(context, returnRoute),
           ),
           actions: <Widget>[
             PopupMenuButton<String>(
               onSelected: (value) {
-                if (value == 'reanalyze') {
-                  _openTextCorrection(context, ref, current);
+                if (value == 'retake') {
+                  _openRetakeCapture(context, current);
+                } else if (value == 'reanalyze') {
+                  _openTextCorrection(context, current);
                 } else if (value == 'delete') {
-                  _confirmDelete(context, ref, current, returnRoute);
+                  _confirmDelete(context, current, returnRoute);
                 }
               },
               itemBuilder: (_) => <PopupMenuEntry<String>>[
                 PopupMenuItem<String>(
+                  value: 'retake',
+                  child: Row(
+                    children: <Widget>[
+                      Icon(CupertinoIcons.camera, color: p.cobalt, size: 18),
+                      const SizedBox(width: 8),
+                      const Text('重新拍照并解析'),
+                    ],
+                  ),
+                ),
+                PopupMenuItem<String>(
                   value: 'reanalyze',
                   child: Row(
                     children: <Widget>[
-                      Icon(CupertinoIcons.arrow_clockwise,
-                          color: p.cobalt, size: 18),
+                      Icon(CupertinoIcons.pencil, color: p.cobalt, size: 18),
                       const SizedBox(width: 8),
-                      const Text('核对题干后重新解析'),
+                      const Text('修改题干并解析'),
                     ],
                   ),
                 ),
@@ -160,6 +353,7 @@ class QuestionDetailScreen extends ConsumerWidget {
         ),
         bottomNavigationBar: bottomBar,
         body: ListView(
+          controller: _scrollController,
           padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
           children: <Widget>[
             // 精简元数据卡片：科目 | 掌握状态 | 批次 | 标签与快捷 + 标签
@@ -173,10 +367,40 @@ class QuestionDetailScreen extends ConsumerWidget {
                     runSpacing: 6,
                     crossAxisAlignment: WrapCrossAlignment.center,
                     children: <Widget>[
-                      EditorialPill(
-                        label: current.subject.label,
-                        backgroundColor: p.cobaltTint,
-                        textColor: p.cobalt,
+                      InkWell(
+                        key: const Key('detail-subject-pill'),
+                        onTap: () => _showEditSubjectSheet(context, current),
+                        borderRadius: BorderRadius.circular(8),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 4.5,
+                          ),
+                          decoration: BoxDecoration(
+                            color: p.cobaltTint,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: <Widget>[
+                              Text(
+                                current.subject.label,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: p.cobalt,
+                                  height: 1.2,
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              Icon(
+                                CupertinoIcons.chevron_down,
+                                size: 11,
+                                color: p.cobalt,
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
                       EditorialPill(
                         label: _masteryLabel(current.masteryLevel),
@@ -210,11 +434,13 @@ class QuestionDetailScreen extends ConsumerWidget {
                           label: tag,
                           bgColor: p.cobaltTint,
                           textColor: p.cobalt,
+                          deleteButtonKey: Key('delete-custom-tag-$tag'),
+                          onDelete: () => _deleteCustomTag(current, tag),
                         ),
                       ),
                       InkWell(
                         key: const Key('detail-add-tag-chip'),
-                        onTap: () => _showAddTagDialog(context, ref, current),
+                        onTap: () => _showAddTagDialog(context, current),
                         borderRadius: BorderRadius.circular(8),
                         child: Container(
                           padding: const EdgeInsets.symmetric(
@@ -331,155 +557,223 @@ class QuestionDetailScreen extends ConsumerWidget {
                   ],
                 ),
               ),
-              const SizedBox(height: 12),
-              // 2. 正确答案 / 可能解法
-              EditorialCard(
-                accentColor: isNeedsReview ? p.terracotta : p.emerald,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    EditorialSectionHeader(
-                      title: isNeedsReview ? '可能解法' : '正确答案',
-                      icon: isNeedsReview
-                          ? CupertinoIcons.exclamationmark_triangle
-                          : CupertinoIcons.checkmark_circle,
-                      iconColor: isNeedsReview ? p.terracotta : p.emerald,
-                    ),
-                    const SizedBox(height: 10),
-                    MathContentView(
-                      result.finalAnswer,
-                      style: TextStyle(
-                        fontSize: 15,
-                        color: isNeedsReview ? p.inkPrimary : p.emerald,
-                        fontWeight: FontWeight.w600,
-                        height: 1.55,
-                      ),
-                    ),
-                    if (_consistencyNotice(result) != null) ...<Widget>[
-                      const SizedBox(height: 10),
-                      _ConsistencyNotice(
-                        notice: _consistencyNotice(result)!,
-                      ),
-                    ],
-                    if (_shouldOfferQuestionCorrection(result)) ...<Widget>[
-                      const SizedBox(height: 12),
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: OutlinedButton.icon(
-                          onPressed: () =>
-                              _openTextCorrection(context, ref, current),
-                          icon: const Icon(CupertinoIcons.pencil, size: 16),
-                          label: const Text('核对题干后重新解析'),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              // 3. 解题步骤（紧跟正确答案，符合先看答案再看步骤的阅读直觉）
-              if (result.steps.isNotEmpty) ...<Widget>[
-                const SizedBox(height: 12),
-                EditorialStepTimeline(steps: result.steps),
-              ],
-              const SizedBox(height: 12),
-              // 4. 错因分析
-              EditorialCard(
-                accentColor: p.terracotta,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    EditorialSectionHeader(
-                      title: '错因分析',
-                      icon: CupertinoIcons.exclamationmark_triangle,
-                      iconColor: p.terracotta,
-                    ),
-                    const SizedBox(height: 10),
-                    MathContentView(
-                      result.mistakeReason,
-                      style: TextStyle(
-                        fontSize: 14.5,
-                        color: p.inkPrimary,
-                        height: 1.6,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
-              // 5. 学习建议
-              EditorialCard(
-                accentColor: p.ochre,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    EditorialSectionHeader(
-                      title: '学习建议',
-                      icon: CupertinoIcons.lightbulb,
-                      iconColor: p.ochre,
-                    ),
-                    const SizedBox(height: 10),
-                    MathContentView(
-                      result.studyAdvice,
-                      style: TextStyle(
-                        fontSize: 14.5,
-                        color: p.inkPrimary,
-                        height: 1.6,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              // 6. 知识点
-              if (result.knowledgePoints.isNotEmpty) ...<Widget>[
+              if (hideSolutionForActiveRecall) ...<Widget>[
                 const SizedBox(height: 12),
                 EditorialCard(
+                  key: const Key('review-active-recall-card'),
+                  accentColor: p.cobalt,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
                       EditorialSectionHeader(
-                        title: '知识点',
-                        icon: CupertinoIcons.bookmark,
+                        title: '先独立思考，再核对答案',
+                        icon: CupertinoIcons.lightbulb,
                         iconColor: p.cobalt,
                       ),
-                      const SizedBox(height: 10),
-                      ...result.knowledgePoints.map((kp) => Container(
-                            width: double.infinity,
-                            margin: const EdgeInsets.only(bottom: 6),
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 11, vertical: 7),
-                            decoration: BoxDecoration(
-                              color: p.subtle,
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: MathContentView(
-                              kp,
-                              style: TextStyle(
-                                fontSize: 13,
-                                height: 1.45,
-                                fontWeight: FontWeight.w500,
-                                color: p.inkPrimary,
-                              ),
-                            ),
-                          )),
+                      const SizedBox(height: 8),
+                      Text(
+                        '在脑中梳理思路或动笔算出结果后，点击下方展开完整解析',
+                        style: TextStyle(
+                          fontSize: 13.5,
+                          color: p.inkSecondary,
+                          height: 1.5,
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      SizedBox(
+                        width: double.infinity,
+                        child: FilledButton.tonalIcon(
+                          key: const Key('review-reveal-answer-button'),
+                          onPressed: () {
+                            setState(
+                              () => _revealedAnswerQuestionId = current.id,
+                            );
+                          },
+                          icon: const Icon(CupertinoIcons.eye, size: 17),
+                          label: const Text('查看答案与解析'),
+                        ),
+                      ),
                     ],
                   ),
                 ),
-              ],
-              const SizedBox(height: 14),
-              _AskAiCard(current: current),
-              const SizedBox(height: 10),
-              _PracticeSummaryCard(current: current),
-              if (mode == QuestionDetailMode.browse) ...<Widget>[
-                const SizedBox(height: 14),
-                _BrowseMasteryToggle(
-                  current: current,
-                  onToggle: () => _markResult(
-                    context,
-                    ref,
-                    current,
-                    current.masteryLevel != MasteryLevel.mastered,
+              ] else ...<Widget>[
+                const SizedBox(height: 12),
+                // 2. 正确答案 / 可能解法
+                EditorialCard(
+                  accentColor: isNeedsReview ? p.terracotta : p.emerald,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      EditorialSectionHeader(
+                        title: isNeedsReview ? '可能解法' : '正确答案',
+                        icon: isNeedsReview
+                            ? CupertinoIcons.exclamationmark_triangle
+                            : CupertinoIcons.checkmark_circle,
+                        iconColor: isNeedsReview ? p.terracotta : p.emerald,
+                      ),
+                      const SizedBox(height: 10),
+                      MathContentView(
+                        result.finalAnswer,
+                        style: TextStyle(
+                          fontSize: 15,
+                          color: isNeedsReview ? p.inkPrimary : p.emerald,
+                          fontWeight: FontWeight.w600,
+                          height: 1.55,
+                        ),
+                      ),
+                      if (_consistencyNotice(result) != null) ...<Widget>[
+                        const SizedBox(height: 10),
+                        _ConsistencyNotice(
+                          notice: _consistencyNotice(result)!,
+                        ),
+                      ],
+                      if (_shouldOfferQuestionCorrection(result)) ...<Widget>[
+                        const SizedBox(height: 12),
+                        Row(
+                          children: <Widget>[
+                            Expanded(
+                              child: FilledButton.tonalIcon(
+                                key: const Key('detail-retake-button'),
+                                onPressed: () =>
+                                    _openRetakeCapture(context, current),
+                                icon:
+                                    const Icon(CupertinoIcons.camera, size: 16),
+                                label: const Text('重新拍照'),
+                                style: FilledButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 10,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                key: const Key('detail-edit-text-button'),
+                                onPressed: () =>
+                                    _openTextCorrection(context, current),
+                                icon:
+                                    const Icon(CupertinoIcons.pencil, size: 16),
+                                label: const Text('修改题干'),
+                                style: OutlinedButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 10,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ],
                   ),
                 ),
+                // 3. 解题步骤（紧跟正确答案，符合先看答案再看步骤的阅读直觉）
+                if (result.steps.isNotEmpty) ...<Widget>[
+                  const SizedBox(height: 12),
+                  EditorialStepTimeline(steps: result.steps),
+                ],
+                const SizedBox(height: 12),
+                // 4. 错因分析
+                EditorialCard(
+                  accentColor: p.terracotta,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      EditorialSectionHeader(
+                        title: '错因分析',
+                        icon: CupertinoIcons.exclamationmark_triangle,
+                        iconColor: p.terracotta,
+                      ),
+                      const SizedBox(height: 10),
+                      MathContentView(
+                        result.mistakeReason,
+                        style: TextStyle(
+                          fontSize: 14.5,
+                          color: p.inkPrimary,
+                          height: 1.6,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                // 5. 学习建议
+                EditorialCard(
+                  accentColor: p.ochre,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      EditorialSectionHeader(
+                        title: '学习建议',
+                        icon: CupertinoIcons.lightbulb,
+                        iconColor: p.ochre,
+                      ),
+                      const SizedBox(height: 10),
+                      MathContentView(
+                        result.studyAdvice,
+                        style: TextStyle(
+                          fontSize: 14.5,
+                          color: p.inkPrimary,
+                          height: 1.6,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                // 6. 知识点
+                if (result.knowledgePoints.isNotEmpty) ...<Widget>[
+                  const SizedBox(height: 12),
+                  EditorialCard(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        EditorialSectionHeader(
+                          title: '知识点',
+                          icon: CupertinoIcons.bookmark,
+                          iconColor: p.cobalt,
+                        ),
+                        const SizedBox(height: 10),
+                        ...result.knowledgePoints.map((kp) => Container(
+                              width: double.infinity,
+                              margin: const EdgeInsets.only(bottom: 6),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 11, vertical: 7),
+                              decoration: BoxDecoration(
+                                color: p.subtle,
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: MathContentView(
+                                kp,
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  height: 1.45,
+                                  fontWeight: FontWeight.w500,
+                                  color: p.inkPrimary,
+                                ),
+                              ),
+                            )),
+                      ],
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 14),
+                _AskAiCard(current: current),
+                const SizedBox(height: 10),
+                _PracticeSummaryCard(current: current),
+                if (mode == QuestionDetailMode.browse) ...<Widget>[
+                  const SizedBox(height: 14),
+                  _BrowseMasteryToggle(
+                    current: current,
+                    onToggle: () => _markResult(
+                      context,
+                      current,
+                      current.masteryLevel != MasteryLevel.mastered,
+                    ),
+                  ),
+                ],
               ],
             ],
           ],
@@ -536,23 +830,22 @@ class QuestionDetailScreen extends ConsumerWidget {
   String _masteryLabel(MasteryLevel level) {
     switch (level) {
       case MasteryLevel.newQuestion:
-        return '待复习';
+        return '新收录';
       case MasteryLevel.reviewing:
-        return '待复习';
+        return '复习中';
       case MasteryLevel.mastered:
         return '已掌握';
     }
   }
 
-  Color _masteryColor(BuildContext context, MasteryLevel level) {
-    final colorScheme = Theme.of(context).colorScheme;
+  Color _masteryColor(EditorialPalette p, MasteryLevel level) {
     switch (level) {
       case MasteryLevel.newQuestion:
-        return colorScheme.onSurfaceVariant;
+        return p.inkSecondary;
       case MasteryLevel.reviewing:
-        return const Color(0xFFD97706);
+        return p.ochre;
       case MasteryLevel.mastered:
-        return const Color(0xFF16A34A);
+        return p.emerald;
     }
   }
 
@@ -566,7 +859,6 @@ class QuestionDetailScreen extends ConsumerWidget {
 
   void _confirmDelete(
     BuildContext context,
-    WidgetRef ref,
     QuestionRecord question,
     String returnRoute,
   ) {
@@ -583,7 +875,7 @@ class QuestionDetailScreen extends ConsumerWidget {
               await ref.read(questionRepositoryProvider).delete(question.id);
               invalidateQuestionList(ref);
               if (ctx.mounted) Navigator.pop(ctx);
-              if (context.mounted) context.go(returnRoute);
+              if (context.mounted) _exitToReturnRoute(context, returnRoute);
             },
             child: const Text('删除', style: TextStyle(color: Colors.red)),
           ),
@@ -592,8 +884,7 @@ class QuestionDetailScreen extends ConsumerWidget {
     );
   }
 
-  void _showAddTagDialog(
-      BuildContext context, WidgetRef ref, QuestionRecord question) {
+  void _showAddTagDialog(BuildContext context, QuestionRecord question) {
     final controller = TextEditingController();
     showDialog<void>(
       context: context,
@@ -699,12 +990,12 @@ class QuestionDetailScreen extends ConsumerWidget {
 
   Future<void> _markResult(
     BuildContext context,
-    WidgetRef ref,
     QuestionRecord question,
     bool mastered, {
     String? returnAfterMark,
   }) async {
     final messenger = ScaffoldMessenger.maybeOf(context);
+    final mode = ref.read(questionDetailModeProvider);
     final controller = ReviewController(
       repository: ref.read(questionRepositoryProvider),
       logRepository: ref.read(reviewLogRepositoryProvider),
@@ -713,6 +1004,70 @@ class QuestionDetailScreen extends ConsumerWidget {
         ? await controller.markMastered(question.id)
         : await controller.markReviewing(question.id);
     invalidateQuestionList(ref);
+
+    final session = mode == QuestionDetailMode.review
+        ? ref.read(activeReviewSessionProvider)
+        : null;
+
+    if (session != null) {
+      var nextSession = session.advance(mastered: mastered);
+      while (nextSession.currentQuestionId != null) {
+        final nextId = nextSession.currentQuestionId!;
+        final nextQ =
+            await ref.read(questionRepositoryProvider).getById(nextId);
+        if (nextQ != null) {
+          ref.read(activeReviewSessionProvider.notifier).state = nextSession;
+          if (mounted) {
+            setState(() => _revealedAnswerQuestionId = null);
+            if (_scrollController.hasClients) {
+              _scrollController.jumpTo(0);
+            }
+          }
+          ref.read(currentQuestionProvider.notifier).state = nextQ;
+          if (context.mounted) {
+            context.go('/notebook/question/${nextQ.id}');
+            messenger
+              ?..hideCurrentSnackBar()
+              ..showSnackBar(
+                SnackBar(
+                  duration: const Duration(milliseconds: 1200),
+                  content: Text(
+                    mastered
+                        ? '已掌握 · 下一题 (${nextSession.currentIndex + 1}/${nextSession.totalCount})'
+                        : '继续巩固 · 下一题 (${nextSession.currentIndex + 1}/${nextSession.totalCount})',
+                  ),
+                ),
+              );
+          }
+          return;
+        }
+        if (!nextSession.hasNext) break;
+        nextSession = ReviewSessionState(
+          queueIds: nextSession.queueIds,
+          currentIndex: nextSession.currentIndex + 1,
+          masteredCount: nextSession.masteredCount,
+          keepReviewingCount: nextSession.keepReviewingCount,
+        );
+      }
+
+      ref.read(activeReviewSessionProvider.notifier).state = null;
+      ref.read(currentQuestionProvider.notifier).state = updated;
+      if (!context.mounted) return;
+      if (returnAfterMark != null) {
+        context.go(returnAfterMark);
+      }
+      messenger
+        ?..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(
+              '本轮复习完成！共复习 ${nextSession.totalCount} 题，已掌握 ${nextSession.masteredCount} 题',
+            ),
+          ),
+        );
+      return;
+    }
+
     ref.read(currentQuestionProvider.notifier).state = updated;
     if (!context.mounted) return;
     if (returnAfterMark != null) {
@@ -857,7 +1212,16 @@ class _AskAiCardState extends ConsumerState<_AskAiCard> {
       });
     } catch (e) {
       if (!mounted) return;
-      setState(() => _isSending = false);
+      setState(() {
+        _messages.remove(userMessage);
+        _isSending = false;
+      });
+      if (_controller.text.isEmpty) {
+        _controller.value = TextEditingValue(
+          text: question,
+          selection: TextSelection.collapsed(offset: question.length),
+        );
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('AI 答疑失败：$e')),
       );
@@ -1675,13 +2039,15 @@ class _PracticeSummaryCardState extends ConsumerState<_PracticeSummaryCard> {
     }
   }
 
-  void _startPractice(QuestionRecord current) {
+  void _startPractice(QuestionRecord current, {bool reviewRound = false}) {
     ref.read(currentPracticeContextProvider.notifier).state = PracticeContext(
       source: PracticeContextSource.notebook,
       returnRoute: '/notebook/question/${current.id}',
     );
     ref.read(currentQuestionProvider.notifier).state = current;
-    context.go('/exercise/practice');
+    context.go(
+      reviewRound ? '/exercise/practice?review=1' : '/exercise/practice',
+    );
   }
 
   Future<void> _syncCompletedExerciseJob(AnalysisJob job) async {
@@ -1821,43 +2187,65 @@ class _PracticeSummaryCardState extends ConsumerState<_PracticeSummaryCard> {
             ),
           ],
           const SizedBox(height: 12),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton.icon(
-              onPressed: isGenerating
-                  ? null
-                  : hasExercises
-                      ? latestRoundCompleted
-                          ? () => _generateAndStartPractice(forceNew: true)
-                          : () => _startPractice(current)
-                      : _generateAndStartPractice,
-              icon: isQueued
-                  ? const Icon(CupertinoIcons.clock, size: 16)
-                  : isGenerating
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : Icon(
-                          hasExercises
-                              ? CupertinoIcons.play_fill
-                              : CupertinoIcons.add_circled,
-                          size: 16,
-                        ),
-              label: Text(isGenerating
-                  ? isQueued
-                      ? '排队中...'
-                      : isSubmitting
-                          ? '提交中...'
-                          : '正在生成...'
-                  : hasExercises
-                      ? latestRoundCompleted
-                          ? '再生成一组'
-                          : '继续练习'
-                      : '生成举一反三'),
+          if (hasExercises && latestRoundCompleted && !isGenerating)
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: OutlinedButton.icon(
+                    key: const Key('detail-review-practice-round'),
+                    onPressed: () => _startPractice(current, reviewRound: true),
+                    icon: const Icon(CupertinoIcons.eye, size: 16),
+                    label: const Text('回看本组'),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: () => _generateAndStartPractice(forceNew: true),
+                    icon: const Icon(CupertinoIcons.play_fill, size: 16),
+                    label: const Text('再生成一组'),
+                  ),
+                ),
+              ],
+            )
+          else
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: isGenerating
+                    ? null
+                    : hasExercises
+                        ? latestRoundCompleted
+                            ? () => _generateAndStartPractice(forceNew: true)
+                            : () => _startPractice(current)
+                        : _generateAndStartPractice,
+                icon: isQueued
+                    ? const Icon(CupertinoIcons.clock, size: 16)
+                    : isGenerating
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : Icon(
+                            hasExercises
+                                ? CupertinoIcons.play_fill
+                                : CupertinoIcons.add_circled,
+                            size: 16,
+                          ),
+                label: Text(isGenerating
+                    ? isQueued
+                        ? '排队中...'
+                        : isSubmitting
+                            ? '提交中...'
+                            : '正在生成...'
+                    : hasExercises
+                        ? latestRoundCompleted
+                            ? '再生成一组'
+                            : '继续练习'
+                        : '生成举一反三'),
+              ),
             ),
-          ),
         ],
       ),
     );
@@ -2109,30 +2497,67 @@ class _BatchSiblingCard extends StatelessWidget {
 }
 
 class _TagChip extends StatelessWidget {
-  const _TagChip(
-      {required this.label, required this.bgColor, required this.textColor});
+  const _TagChip({
+    required this.label,
+    required this.bgColor,
+    required this.textColor,
+    this.deleteButtonKey,
+    this.onDelete,
+  });
 
   final String label;
   final Color bgColor;
   final Color textColor;
+  final Key? deleteButtonKey;
+  final VoidCallback? onDelete;
 
   @override
   Widget build(BuildContext context) {
     final p = EditorialPalette.of(context);
+    final fg = p.isDark ? p.inkPrimary : textColor;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4.5),
+      padding: EdgeInsets.fromLTRB(9, 4.5, onDelete != null ? 5 : 9, 4.5),
       decoration: BoxDecoration(
         color: p.isDark ? textColor.withValues(alpha: 0.14) : bgColor,
         borderRadius: BorderRadius.circular(8),
       ),
-      child: Text(
-        label,
-        style: TextStyle(
-          fontSize: 12,
-          color: p.isDark ? p.inkPrimary : textColor,
-          fontWeight: FontWeight.w500,
-        ),
-      ),
+      child: onDelete == null
+          ? Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                color: fg,
+                fontWeight: FontWeight.w500,
+              ),
+            )
+          : Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: fg,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(width: 3),
+                GestureDetector(
+                  key: deleteButtonKey,
+                  behavior: HitTestBehavior.opaque,
+                  onTap: onDelete,
+                  child: Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 2, vertical: 1),
+                    child: Icon(
+                      CupertinoIcons.xmark,
+                      size: 11,
+                      color: fg.withValues(alpha: 0.8),
+                    ),
+                  ),
+                ),
+              ],
+            ),
     );
   }
 }
