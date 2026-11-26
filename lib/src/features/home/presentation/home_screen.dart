@@ -458,6 +458,8 @@ class _RecentList extends StatelessWidget {
           onTap: () {
             ref.read(currentQuestionProvider.notifier).state = q;
             ref.read(questionDetailReturnRouteProvider.notifier).state = '/';
+            ref.read(questionDetailModeProvider.notifier).state =
+                QuestionDetailMode.browse;
             context.go('/notebook/question/${q.id}');
           },
         );

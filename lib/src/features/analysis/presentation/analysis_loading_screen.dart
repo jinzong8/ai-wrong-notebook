@@ -11,6 +11,7 @@ import 'package:smart_wrong_notebook/src/data/remote/ai/ai_analysis_service.dart
 import 'package:smart_wrong_notebook/src/data/services/question_analysis_coordinator.dart';
 import 'package:smart_wrong_notebook/src/data/services/single_question_auto_save.dart';
 import 'package:smart_wrong_notebook/src/domain/models/question_record.dart';
+import 'package:smart_wrong_notebook/src/features/capture/presentation/camera_capture_crop_screen.dart';
 
 class AnalysisLoadingScreen extends ConsumerStatefulWidget {
   const AnalysisLoadingScreen({
@@ -160,6 +161,8 @@ class _AnalysisLoadingScreenState extends ConsumerState<AnalysisLoadingScreen> {
         if (!widget.isReanalysis) {
           ref.read(questionDetailReturnRouteProvider.notifier).state =
               ref.read(captureReturnRouteProvider);
+          ref.read(questionDetailModeProvider.notifier).state =
+              QuestionDetailMode.capture;
         }
         final messenger = ScaffoldMessenger.maybeOf(context);
         context.go('/notebook/question/${saved.id}');
@@ -200,7 +203,7 @@ class _AnalysisLoadingScreenState extends ConsumerState<AnalysisLoadingScreen> {
       context.go('/notebook/question/${current.id}');
       return;
     }
-    context.go('/');
+    context.go(ref.read(captureReturnRouteProvider));
   }
 
   @override
@@ -225,8 +228,16 @@ class _AnalysisLoadingScreenState extends ConsumerState<AnalysisLoadingScreen> {
                 stageLabels: _stageLabels,
                 isReanalysis: widget.isReanalysis,
                 progressText: _progressText,
-                onContinueInBackground:
-                    _canContinueInBackground ? () => context.go('/') : null,
+                onCaptureNextInBackground: _canContinueInBackground
+                    ? () => openCameraCaptureFlow(
+                          context,
+                          ref,
+                          returnRoute: ref.read(captureReturnRouteProvider),
+                        )
+                    : null,
+                onBackHomeInBackground: _canContinueInBackground
+                    ? () => context.go(ref.read(captureReturnRouteProvider))
+                    : null,
               ),
       ),
     );
@@ -344,7 +355,8 @@ class _LoadingView extends StatefulWidget {
     required this.stageLabels,
     required this.isReanalysis,
     this.progressText,
-    this.onContinueInBackground,
+    this.onCaptureNextInBackground,
+    this.onBackHomeInBackground,
   });
 
   final int step;
@@ -352,7 +364,8 @@ class _LoadingView extends StatefulWidget {
   final List<String> stageLabels;
   final bool isReanalysis;
   final String? progressText;
-  final VoidCallback? onContinueInBackground;
+  final VoidCallback? onCaptureNextInBackground;
+  final VoidCallback? onBackHomeInBackground;
 
   @override
   State<_LoadingView> createState() => _LoadingViewState();
@@ -532,17 +545,29 @@ class _LoadingViewState extends State<_LoadingView>
                 ],
               ),
             ),
-            if (widget.onContinueInBackground != null) ...<Widget>[
+            if (widget.onCaptureNextInBackground != null) ...<Widget>[
               const SizedBox(height: 18),
               SizedBox(
                 width: double.infinity,
-                child: OutlinedButton.icon(
-                  onPressed: widget.onContinueInBackground,
-                  icon: const Icon(CupertinoIcons.camera, size: 17),
-                  label: const Text('继续录题'),
+                child: FilledButton.icon(
+                  key: const Key('loading-capture-next'),
+                  onPressed: widget.onCaptureNextInBackground,
+                  icon: const Icon(CupertinoIcons.camera_fill, size: 17),
+                  label: const Text('后台解析，继续拍下一题'),
                 ),
               ),
-              const SizedBox(height: 8),
+              if (widget.onBackHomeInBackground != null) ...<Widget>[
+                const SizedBox(height: 4),
+                TextButton(
+                  key: const Key('loading-back-home'),
+                  onPressed: widget.onBackHomeInBackground,
+                  child: Text(
+                    '先回首页',
+                    style: TextStyle(fontSize: 13, color: p.inkSecondary),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 2),
               Text(
                 '后台解析不会中断，单题完成后自动入库',
                 style: TextStyle(fontSize: 12, color: p.inkMuted),

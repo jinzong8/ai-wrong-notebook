@@ -29,6 +29,8 @@ import 'package:smart_wrong_notebook/src/domain/models/question_split_session.da
 import 'package:smart_wrong_notebook/src/domain/models/review_log.dart';
 import 'package:smart_wrong_notebook/src/domain/models/subject.dart';
 import 'package:smart_wrong_notebook/src/features/capture/application/camera_capture_session.dart';
+import 'package:smart_wrong_notebook/src/features/update/data/app_update_service.dart';
+import 'package:smart_wrong_notebook/src/features/update/domain/app_update_models.dart';
 
 // --- Repository providers (default implementations) ---
 
@@ -207,6 +209,18 @@ final Provider<CameraCaptureSessionFactory>
 
 final StateProvider<QuestionRecord?> currentQuestionProvider =
     StateProvider<QuestionRecord?>((ref) => null);
+
+/// Entry context for [QuestionDetailScreen] so bottom actions adapt cleanly
+/// to the user's current task (post-capture batch shooting vs active review vs
+/// casual reading).
+enum QuestionDetailMode {
+  browse,
+  capture,
+  review,
+}
+
+final StateProvider<QuestionDetailMode> questionDetailModeProvider =
+    StateProvider<QuestionDetailMode>((ref) => QuestionDetailMode.browse);
 
 /// Route to return to when leaving [QuestionDetailScreen] via AppBar back or
 /// Android system back gesture. Defaults to `/notebook`.
@@ -593,3 +607,30 @@ class ThemeModeNotifier extends StateNotifier<ThemeMode> {
     await _settingsRepo.setString('theme_mode', value);
   }
 }
+
+// --- Staged Silent Official GitHub Updater ---
+
+final Provider<AppUpdatePlatformBridge> appUpdatePlatformBridgeProvider =
+    Provider<AppUpdatePlatformBridge>((ref) {
+  return MethodChannelAppUpdatePlatformBridge();
+});
+
+final Provider<AppUpdateHttpClient> appUpdateHttpClientProvider =
+    Provider<AppUpdateHttpClient>((ref) {
+  return DioAppUpdateHttpClient();
+});
+
+final Provider<AppUpdateService> appUpdateServiceProvider =
+    Provider<AppUpdateService>((ref) {
+  return AppUpdateService(
+    settingsRepository: ref.watch(settingsRepositoryProvider),
+    platformBridge: ref.watch(appUpdatePlatformBridgeProvider),
+    httpClient: ref.watch(appUpdateHttpClientProvider),
+  );
+});
+
+final StateNotifierProvider<AppUpdateController, AppUpdateState>
+    appUpdateControllerProvider =
+    StateNotifierProvider<AppUpdateController, AppUpdateState>((ref) {
+  return AppUpdateController(ref.watch(appUpdateServiceProvider));
+});

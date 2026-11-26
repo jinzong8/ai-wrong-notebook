@@ -24,6 +24,7 @@ import 'package:smart_wrong_notebook/src/features/analysis/presentation/question
 import 'package:smart_wrong_notebook/src/features/analysis/presentation/exercise_practice_screen.dart';
 import 'package:smart_wrong_notebook/src/common/widgets/app_back_scope.dart';
 import 'package:smart_wrong_notebook/src/data/repositories/settings_repository.dart';
+import 'package:smart_wrong_notebook/src/features/update/presentation/app_update_dialog.dart';
 
 GoRouter buildRouter(
   SettingsRepository settingsRepo, {
@@ -163,25 +164,30 @@ class ScaffoldWithNavBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return TabShellBackScope(
-      navigationShell: navigationShell,
-      onExitApp: onExitApp,
-      child: Scaffold(
-        body: navigationShell,
-        bottomNavigationBar: NavigationBar(
-          selectedIndex: navigationShell.currentIndex,
-          onDestinationSelected: (int index) => navigationShell.goBranch(index),
-          destinations: const <NavigationDestination>[
-            NavigationDestination(
-                icon: Icon(CupertinoIcons.house), label: AppStrings.homeTab),
-            NavigationDestination(
-                icon: Icon(CupertinoIcons.book), label: AppStrings.notebookTab),
-            NavigationDestination(
-                icon: Icon(CupertinoIcons.arrow_2_circlepath),
-                label: AppStrings.reviewTab),
-            NavigationDestination(
-                icon: Icon(CupertinoIcons.gear), label: AppStrings.settingsTab),
-          ],
+    return AppUpdateStartupListener(
+      child: TabShellBackScope(
+        navigationShell: navigationShell,
+        onExitApp: onExitApp,
+        child: Scaffold(
+          body: navigationShell,
+          bottomNavigationBar: NavigationBar(
+            selectedIndex: navigationShell.currentIndex,
+            onDestinationSelected: (int index) =>
+                navigationShell.goBranch(index),
+            destinations: const <NavigationDestination>[
+              NavigationDestination(
+                  icon: Icon(CupertinoIcons.house), label: AppStrings.homeTab),
+              NavigationDestination(
+                  icon: Icon(CupertinoIcons.book),
+                  label: AppStrings.notebookTab),
+              NavigationDestination(
+                  icon: Icon(CupertinoIcons.arrow_2_circlepath),
+                  label: AppStrings.reviewTab),
+              NavigationDestination(
+                  icon: Icon(CupertinoIcons.gear),
+                  label: AppStrings.settingsTab),
+            ],
+          ),
         ),
       ),
     );

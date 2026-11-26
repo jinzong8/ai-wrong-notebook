@@ -156,9 +156,11 @@ class _CameraCaptureCropScreenState
   Size _lastPreviewViewportSize = Size.zero;
   Rect _initialCropRect = fullNormalizedCropRect;
   Rect _cropRect = fullNormalizedCropRect;
+  List<Offset>? _cropPolygon;
   int _quarterTurns = 0;
   double _fineRotationDegrees = 0.0;
   bool _adjustingAngle = false;
+  int _cropResetSignal = 0;
 
   Offset? _focusIndicatorPosition;
   Timer? _focusIndicatorTimer;
@@ -312,9 +314,11 @@ class _CameraCaptureCropScreenState
       _fromLiveViewfinder = fromLiveViewfinder;
       _initialCropRect = initialCrop;
       _cropRect = initialCrop;
+      _cropPolygon = null;
       _quarterTurns = 0;
       _fineRotationDegrees = 0.0;
       _adjustingAngle = false;
+      _cropResetSignal++;
       _stage = _CaptureStage.cropping;
     });
 
@@ -341,9 +345,11 @@ class _CameraCaptureCropScreenState
       setState(() {
         _initialCropRect = fullNormalizedCropRect;
         _cropRect = fullNormalizedCropRect;
+        _cropPolygon = null;
         _quarterTurns = 0;
         _fineRotationDegrees = 0.0;
         _adjustingAngle = false;
+        _cropResetSignal++;
         _stage = _CaptureStage.preview;
       });
     } else {
@@ -440,6 +446,10 @@ class _CameraCaptureCropScreenState
     setState(() {
       _quarterTurns = (_quarterTurns + (clockwise ? 1 : 3)) % 4;
       _cropRect = rotateNormalizedCropRect(_cropRect, clockwise: clockwise);
+      if (_cropPolygon != null) {
+        _cropPolygon =
+            rotateNormalizedPolygon(_cropPolygon!, clockwise: clockwise);
+      }
     });
   }
 
@@ -449,7 +459,9 @@ class _CameraCaptureCropScreenState
       _quarterTurns = 0;
       _fineRotationDegrees = 0.0;
       _adjustingAngle = false;
+      _cropResetSignal++;
       _cropRect = _initialCropRect;
+      _cropPolygon = null;
     });
   }
 
@@ -480,8 +492,13 @@ class _CameraCaptureCropScreenState
       final storage = ref.read(imageStorageServiceProvider);
       final String savedPath;
 
+      final hasNonRectPolygon = _cropPolygon != null &&
+          _cropPolygon!.length >= kMinPolygonVertices &&
+          !isAxisAlignedRectPolygon(_cropPolygon, _cropRect);
+
       final useOriginal = forceOriginal ||
-          (_quarterTurns == 0 &&
+          (!hasNonRectPolygon &&
+              _quarterTurns == 0 &&
               _fineRotationDegrees.abs() < 0.05 &&
               isEffectivelyFullCrop(_cropRect));
       if (useOriginal) {
@@ -493,6 +510,7 @@ class _CameraCaptureCropScreenState
           quarterTurns: _quarterTurns,
           fineRotationDegrees: _fineRotationDegrees,
           normalizedCropRect: _cropRect,
+          normalizedPolygon: _cropPolygon,
         );
         if (!mounted) return;
         croppedTempFile = File(
@@ -656,10 +674,13 @@ class _CameraCaptureCropScreenState
     if (!isCropping) {
       return '将题目对准中间框拍照，拍完按此范围框选并可微调';
     }
-    if (_fromLiveViewfinder) {
-      return '已按取景范围框选，拖动四边或四角可微调';
+    if (_cropPolygon != null) {
+      return '拖动圆点微调，拖边中点 + 加节点，双击圆点可删';
     }
-    return '拖动四边或四角自由框选单道题，不限宽高比';
+    if (_fromLiveViewfinder) {
+      return '双指放大可触发多边形节点，轻松绕开相邻题目';
+    }
+    return '双指放大触发多边形节点，自由框选单道题，不限宽高比';
   }
 
   IconData _flashIcon(CaptureFlashMode mode) => switch (mode) {
@@ -850,9 +871,12 @@ class _CameraCaptureCropScreenState
           fineRotationDegrees: _fineRotationDegrees,
           emphasizeGrid: _adjustingAngle,
           fillWidth: _fromLiveViewfinder,
+          resetSignal: _cropResetSignal,
           cropRect: _cropRect,
+          cropPolygon: _cropPolygon,
           enabled: !_saving,
           onCropRectChanged: (next) => setState(() => _cropRect = next),
+          onCropPolygonChanged: (poly) => setState(() => _cropPolygon = poly),
         );
     }
   }

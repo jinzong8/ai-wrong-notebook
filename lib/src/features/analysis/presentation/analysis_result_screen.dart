@@ -569,6 +569,10 @@ class _AnalysisResultScreenState extends ConsumerState<AnalysisResultScreen> {
       ref.invalidate(scanTaskCountProvider);
       ref.read(currentQuestionProvider.notifier).state = saved;
       ref.read(currentQuestionSplitSessionProvider.notifier).state = null;
+      ref.read(questionDetailReturnRouteProvider.notifier).state =
+          ref.read(captureReturnRouteProvider);
+      ref.read(questionDetailModeProvider.notifier).state =
+          QuestionDetailMode.capture;
       final messenger = ScaffoldMessenger.maybeOf(context);
       context.go('/notebook/question/${saved.id}');
       messenger?.showSnackBar(

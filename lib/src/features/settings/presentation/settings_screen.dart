@@ -3,13 +3,46 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:smart_wrong_notebook/src/app/providers.dart';
+import 'package:smart_wrong_notebook/src/features/update/presentation/app_update_dialog.dart';
 
-class SettingsScreen extends ConsumerWidget {
+class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends ConsumerState<SettingsScreen> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref.read(appUpdateControllerProvider.notifier).initializeOnStartup();
+    });
+  }
+
+  Future<void> _handleCheckUpdateTap() async {
+    final ready = await ref
+        .read(appUpdateControllerProvider.notifier)
+        .checkReadyOrContinueStaging();
+    if (!mounted) return;
+    if (ready != null) {
+      await showAppUpdateReadyDialog(context, ref, ready);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('当前暂无已就绪的新版本（如有发布将在后台静默准备）'),
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final themeMode = ref.watch(themeModeProvider);
+    final updateState = ref.watch(appUpdateControllerProvider);
+    final hasReadyUpdate = updateState.hasReadyUpdate;
 
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
@@ -144,6 +177,90 @@ class SettingsScreen extends ConsumerWidget {
                   onTap: () => context.go('/settings/data'),
                 ),
               ],
+            ),
+          ),
+          const SizedBox(height: 24),
+          // About & Update
+          Text('关于与更新',
+              style: theme.textTheme.titleMedium
+                  ?.copyWith(fontWeight: FontWeight.w600)),
+          const SizedBox(height: 12),
+          _SettingsSection(
+            child: InkWell(
+              key: const Key('settings-check-update'),
+              onTap: _handleCheckUpdateTap,
+              borderRadius: BorderRadius.circular(12),
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                child: Row(
+                  children: <Widget>[
+                    const _SettingsIcon(
+                      icon: CupertinoIcons.arrow_down_circle,
+                      iconColor: Color(0xFF2563EB),
+                      lightBg: Color(0xFFEFF6FF),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Text(
+                            '检查更新',
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: colorScheme.onSurface,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            hasReadyUpdate
+                                ? '新版本 v${updateState.readyUpdate!.version} 已准备就绪，点击立即安装'
+                                : '当前版本 v${updateState.currentVersion} · 后台自动静默准备更新',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: hasReadyUpdate
+                                  ? const Color(0xFF059669)
+                                  : colorScheme.onSurfaceVariant,
+                              fontWeight: hasReadyUpdate
+                                  ? FontWeight.w600
+                                  : FontWeight.w400,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (hasReadyUpdate) ...<Widget>[
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color:
+                              const Color(0xFF059669).withValues(alpha: 0.14),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: const Text(
+                          '已就绪',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF059669),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                    ],
+                    Icon(
+                      CupertinoIcons.chevron_right,
+                      size: 22,
+                      color:
+                          colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
+                    ),
+                  ],
+                ),
+              ),
             ),
           ),
         ],

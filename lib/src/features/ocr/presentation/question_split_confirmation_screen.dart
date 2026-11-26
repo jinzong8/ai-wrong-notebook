@@ -508,6 +508,10 @@ class _QuestionSplitConfirmationScreenState
       ref.invalidate(scanTaskCountProvider);
       ref.read(currentQuestionProvider.notifier).state = records.first;
       ref.read(currentQuestionSplitSessionProvider.notifier).state = null;
+      ref.read(questionDetailReturnRouteProvider.notifier).state =
+          ref.read(captureReturnRouteProvider);
+      ref.read(questionDetailModeProvider.notifier).state =
+          QuestionDetailMode.capture;
       if (!mounted) return;
       messenger.showSnackBar(
         SnackBar(

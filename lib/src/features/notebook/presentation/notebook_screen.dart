@@ -238,6 +238,9 @@ class _NotebookScreenState extends ConsumerState<NotebookScreen> {
                                 .read(
                                     questionDetailReturnRouteProvider.notifier)
                                 .state = '/notebook';
+                            ref
+                                .read(questionDetailModeProvider.notifier)
+                                .state = QuestionDetailMode.browse;
                             context.go('/notebook/question/${q.id}');
                           },
                           onDelete: () => _confirmDelete(context, ref, q),

@@ -25,9 +25,11 @@ class ImageCropScreen extends ConsumerStatefulWidget {
 class _ImageCropScreenState extends ConsumerState<ImageCropScreen> {
   ui.Image? _decodedImage;
   Rect _cropRect = fullNormalizedCropRect;
+  List<Offset>? _cropPolygon;
   int _quarterTurns = 0;
   double _fineRotationDegrees = 0.0;
   bool _adjustingAngle = false;
+  int _cropResetSignal = 0;
   bool _loading = true;
   bool _saving = false;
   String? _loadError;
@@ -72,9 +74,11 @@ class _ImageCropScreenState extends ConsumerState<ImageCropScreen> {
       setState(() {
         _decodedImage = image;
         _cropRect = fullNormalizedCropRect;
+        _cropPolygon = null;
         _quarterTurns = 0;
         _fineRotationDegrees = 0.0;
         _adjustingAngle = false;
+        _cropResetSignal++;
         _loading = false;
       });
     } catch (e) {
@@ -91,6 +95,10 @@ class _ImageCropScreenState extends ConsumerState<ImageCropScreen> {
     setState(() {
       _quarterTurns = (_quarterTurns + (clockwise ? 1 : 3)) % 4;
       _cropRect = rotateNormalizedCropRect(_cropRect, clockwise: clockwise);
+      if (_cropPolygon != null) {
+        _cropPolygon =
+            rotateNormalizedPolygon(_cropPolygon!, clockwise: clockwise);
+      }
     });
   }
 
@@ -100,7 +108,9 @@ class _ImageCropScreenState extends ConsumerState<ImageCropScreen> {
       _quarterTurns = 0;
       _fineRotationDegrees = 0.0;
       _adjustingAngle = false;
+      _cropResetSignal++;
       _cropRect = fullNormalizedCropRect;
+      _cropPolygon = null;
     });
   }
 
@@ -122,8 +132,13 @@ class _ImageCropScreenState extends ConsumerState<ImageCropScreen> {
     final image = _decodedImage;
     if (current == null || image == null || _saving) return;
 
+    final hasNonRectPolygon = _cropPolygon != null &&
+        _cropPolygon!.length >= kMinPolygonVertices &&
+        !isAxisAlignedRectPolygon(_cropPolygon, _cropRect);
+
     // Fast path: full unrotated frame avoids unnecessary re-encoding.
-    if (_quarterTurns == 0 &&
+    if (!hasNonRectPolygon &&
+        _quarterTurns == 0 &&
         _fineRotationDegrees.abs() < 0.05 &&
         isEffectivelyFullCrop(_cropRect)) {
       _useOriginalImage();
@@ -138,6 +153,7 @@ class _ImageCropScreenState extends ConsumerState<ImageCropScreen> {
         quarterTurns: _quarterTurns,
         fineRotationDegrees: _fineRotationDegrees,
         normalizedCropRect: _cropRect,
+        normalizedPolygon: _cropPolygon,
       );
       if (!mounted) return;
 
@@ -218,10 +234,12 @@ class _ImageCropScreenState extends ConsumerState<ImageCropScreen> {
               width: double.infinity,
               color: barBg,
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-              child: const Text(
-                '拖动四边或四角自由框选单道题，不限宽高比',
+              child: Text(
+                _cropPolygon != null
+                    ? '拖动圆点微调，拖边中点 + 新增节点，双击圆点可删除（不限宽高比）'
+                    : '双指放大自动开启多边形节点，可绕开相邻题目，不限宽高比',
                 textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 12, color: Colors.white60),
+                style: const TextStyle(fontSize: 12, color: Colors.white60),
               ),
             ),
             Expanded(
@@ -380,9 +398,12 @@ class _ImageCropScreenState extends ConsumerState<ImageCropScreen> {
       quarterTurns: _quarterTurns,
       fineRotationDegrees: _fineRotationDegrees,
       emphasizeGrid: _adjustingAngle,
+      resetSignal: _cropResetSignal,
       cropRect: _cropRect,
+      cropPolygon: _cropPolygon,
       enabled: !_saving,
       onCropRectChanged: (next) => setState(() => _cropRect = next),
+      onCropPolygonChanged: (poly) => setState(() => _cropPolygon = poly),
     );
   }
 }

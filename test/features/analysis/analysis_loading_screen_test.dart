@@ -120,7 +120,7 @@ class _DeferredBackgroundQuestionAnalysisCoordinator
 
 void main() {
   testWidgets(
-      'background queue exposes continue-recording action after enqueue',
+      'background queue exposes continue-recording and back-home actions after enqueue',
       (tester) async {
     final settingsRepo = _TestSettingsRepository();
     final coordinator = _DeferredBackgroundQuestionAnalysisCoordinator();
@@ -146,6 +146,10 @@ void main() {
           builder: (_, __) => const Scaffold(body: Text('HOME_SCREEN')),
         ),
         GoRoute(
+          path: '/capture/camera',
+          builder: (_, __) => const Scaffold(body: Text('CAMERA_SCREEN')),
+        ),
+        GoRoute(
           path: '/analysis/loading',
           builder: (_, __) => const AnalysisLoadingScreen(),
         ),
@@ -155,6 +159,7 @@ void main() {
         ),
       ],
     );
+    addTearDown(router.dispose);
 
     await tester.pumpWidget(UncontrolledProviderScope(
       container: container,
@@ -162,10 +167,12 @@ void main() {
     ));
     await tester.pump();
 
-    expect(find.text('继续录题'), findsOneWidget);
-    await tester.tap(find.text('继续录题'));
+    expect(find.text('后台解析，继续拍下一题'), findsOneWidget);
+    expect(find.text('先回首页'), findsOneWidget);
+    await tester.tap(find.text('后台解析，继续拍下一题'));
     await tester.pumpAndSettle();
-    expect(find.text('HOME_SCREEN'), findsOneWidget);
+    expect(find.text('CAMERA_SCREEN'), findsOneWidget);
+    expect(container.read(captureReturnRouteProvider), '/');
 
     coordinator.completer.complete(question.copyWith(
       contentStatus: ContentStatus.ready,
@@ -333,6 +340,8 @@ void main() {
     expect(updated.analysisResult?.finalAnswer, '答案');
     expect(updated.extractedQuestionText,
         service.extractionResult.extractedQuestionText);
+    expect(
+        container.read(questionDetailModeProvider), QuestionDetailMode.capture);
   });
 
   testWidgets(

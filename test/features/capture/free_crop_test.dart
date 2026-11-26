@@ -110,7 +110,8 @@ void main() {
       expect(screen.height, closeTo(600, 1e-3));
     });
 
-    test('corner dragging adjusts width and height independently without ratio lock',
+    test(
+        'corner dragging adjusts width and height independently without ratio lock',
         () {
       final crop = applyCropHandleDelta(
         normalizedRect: fullNormalizedCropRect,
@@ -139,7 +140,8 @@ void main() {
       expect(moved.top, closeTo(0.2, 1e-6));
     });
 
-    test('hitTestCropHandle distinguishes top vs bottom edge on a thin 36px strip',
+    test(
+        'hitTestCropHandle distinguishes top vs bottom edge on a thin 36px strip',
         () {
       const thinStrip = Rect.fromLTWH(20, 260, 300, 36);
 
@@ -173,7 +175,8 @@ void main() {
       );
     });
 
-    test('rotateNormalizedCropRect rotates clockwise and counter-clockwise inversely',
+    test(
+        'rotateNormalizedCropRect rotates clockwise and counter-clockwise inversely',
         () {
       const original = Rect.fromLTRB(0.1, 0.2, 0.6, 0.5);
       final cw = rotateNormalizedCropRect(original, clockwise: true);
@@ -198,10 +201,74 @@ void main() {
       expect(spec.outputWidth, 1000);
       expect(spec.outputHeight, 100);
     });
+
+    test(
+        'displayToNormalizedCropRect is exact inverse of normalizedToDisplayRect',
+        () {
+      const original = Rect.fromLTRB(0.18, 0.34, 0.82, 0.61);
+      final screen = normalizedToDisplayRect(original, displayRect);
+      final roundTrip = displayToNormalizedCropRect(screen, displayRect);
+
+      expect(roundTrip.left, closeTo(original.left, 1e-6));
+      expect(roundTrip.top, closeTo(original.top, 1e-6));
+      expect(roundTrip.right, closeTo(original.right, 1e-6));
+      expect(roundTrip.bottom, closeTo(original.bottom, 1e-6));
+    });
+
+    test(
+        'computeFocalZoomDisplayRect keeps focal point anchored under fingers and clamps to crop box',
+        () {
+      const base = Rect.fromLTWH(0, -30, 400, 700);
+      const anchorCrop = Rect.fromLTWH(0, 270, 400, 100);
+      const focal = Offset(300, 320); // u = 0.75 on image
+
+      final zoomedIn = computeFocalZoomDisplayRect(
+        baseDisplayRect: base,
+        startDisplayRect: base,
+        startZoom: 1.0,
+        startFocalPoint: focal,
+        currentFocalPoint: focal,
+        scaleFactor: 2.5,
+        anchorCropRect: anchorCrop,
+      );
+
+      expect(zoomedIn.width, closeTo(1000, 1e-4));
+      expect(zoomedIn.height, closeTo(1750, 1e-4));
+      // Image point u = 0.75 stays right under x = 300.
+      expect(zoomedIn.left + 0.75 * zoomedIn.width, closeTo(300, 1e-4));
+      expect(zoomedIn.left, lessThanOrEqualTo(anchorCrop.left));
+      expect(zoomedIn.right, greaterThanOrEqualTo(anchorCrop.right));
+
+      // Extreme rightward drag clamps cleanly at anchorCrop.left = 0 (no void).
+      final clampedEdge = computeFocalZoomDisplayRect(
+        baseDisplayRect: base,
+        startDisplayRect: base,
+        startZoom: 1.0,
+        startFocalPoint: const Offset(20, 320),
+        currentFocalPoint: const Offset(260, 320),
+        scaleFactor: 2.0,
+        anchorCropRect: anchorCrop,
+      );
+      expect(clampedEdge.left, closeTo(0.0, 1e-4));
+
+      // Zooming out to 0.5x shrinks width to 200 and centers horizontally.
+      final zoomedOut = computeFocalZoomDisplayRect(
+        baseDisplayRect: base,
+        startDisplayRect: base,
+        startZoom: 1.0,
+        startFocalPoint: const Offset(200, 320),
+        currentFocalPoint: const Offset(200, 320),
+        scaleFactor: 0.5,
+        anchorCropRect: anchorCrop,
+      );
+      expect(zoomedOut.width, closeTo(200, 1e-4));
+      expect(zoomedOut.center.dx, closeTo(anchorCrop.center.dx, 1e-4));
+    });
   });
 
   group('image_crop_processor', () {
-    test('crops a wide thin middle question strip without aspect ratio clamping',
+    test(
+        'crops a wide thin middle question strip without aspect ratio clamping',
         () async {
       final tempDir =
           Directory.systemTemp.createTempSync('free_crop_processor_');
@@ -237,8 +304,7 @@ void main() {
     });
 
     test('rotates 90 degrees clockwise and crops accurately', () async {
-      final tempDir =
-          Directory.systemTemp.createTempSync('free_crop_rotate_');
+      final tempDir = Directory.systemTemp.createTempSync('free_crop_rotate_');
       try {
         final file =
             _createThreeBandWorksheetPng(tempDir, width: 200, height: 400);
@@ -268,7 +334,8 @@ void main() {
       }
     });
 
-    test('straightens a -25 degree tilted question bar accurately with fineRotationDegrees',
+    test(
+        'straightens a -25 degree tilted question bar accurately with fineRotationDegrees',
         () async {
       final tempDir =
           Directory.systemTemp.createTempSync('free_crop_fine_angle_');
@@ -396,8 +463,7 @@ void main() {
         expect(find.byKey(const Key('crop-canvas')), findsOneWidget);
         expect(find.textContaining('不限宽高比'), findsOneWidget);
 
-        final canvasRect =
-            tester.getRect(find.byKey(const Key('crop-canvas')));
+        final canvasRect = tester.getRect(find.byKey(const Key('crop-canvas')));
         final fitted = computeFittedImageRect(
           viewportSize: canvasRect.size,
           imageSize: const Size(300, 600),
@@ -509,6 +575,160 @@ void main() {
 
         expect(find.text('HOME_ROUTE'), findsOneWidget);
         expect(find.text('LOADING_ROUTE'), findsNothing);
+      } finally {
+        tempDir.deleteSync(recursive: true);
+      }
+    });
+  });
+
+  group('Map-style polygon crop geometry & paper-tone masking', () {
+    test(
+        'hitTestPolygonHandle, isPointInPolygon, and rotateNormalizedPolygon handle concave L-shapes accurately',
+        () {
+      // Concave L-shape: full top band (y: 0.1..0.4) + right-side diagram
+      // (x: 0.55..0.95, y: 0.4..0.8), excluding bottom-left (x: 0.05..0.55, y: 0.4..0.8).
+      final lPoly = <Offset>[
+        const Offset(0.05, 0.10),
+        const Offset(0.95, 0.10),
+        const Offset(0.95, 0.80),
+        const Offset(0.55, 0.80),
+        const Offset(0.55, 0.40),
+        const Offset(0.05, 0.40),
+      ];
+
+      expect(computePolygonBounds(lPoly),
+          const Rect.fromLTRB(0.05, 0.10, 0.95, 0.80));
+      expect(
+        isAxisAlignedRectPolygon(lPoly, computePolygonBounds(lPoly)),
+        isFalse,
+      );
+      expect(
+        isAxisAlignedRectPolygon(
+          rectToPolygonVertices(const Rect.fromLTRB(0.1, 0.2, 0.8, 0.7)),
+          const Rect.fromLTRB(0.1, 0.2, 0.8, 0.7),
+        ),
+        isTrue,
+      );
+
+      // Inside top text stem:
+      expect(isPointInPolygon(const Offset(0.25, 0.25), lPoly), isTrue);
+      // Inside right-side diagram:
+      expect(isPointInPolygon(const Offset(0.75, 0.65), lPoly), isTrue);
+      // Inside excluded bottom-left neighboring question:
+      expect(isPointInPolygon(const Offset(0.25, 0.65), lPoly), isFalse);
+
+      // 4 clockwise 90-degree rotations return exact original vertices:
+      var rotated = lPoly;
+      for (var i = 0; i < 4; i++) {
+        rotated = rotateNormalizedPolygon(rotated, clockwise: true);
+      }
+      for (var i = 0; i < lPoly.length; i++) {
+        expect(rotated[i].dx, closeTo(lPoly[i].dx, 1e-6));
+        expect(rotated[i].dy, closeTo(lPoly[i].dy, 1e-6));
+      }
+
+      // Screen hit-testing prioritizes vertex -> midpoint (+) -> edge -> interior:
+      final screenVerts = normalizedPolygonToDisplay(
+          lPoly, const Rect.fromLTWH(0, 0, 400, 600));
+      final vHit = hitTestPolygonHandle(
+        position: screenVerts[4] + const Offset(4, -3),
+        screenVertices: screenVerts,
+      );
+      expect(vHit?.kind, PolygonHitKind.vertex);
+      expect(vHit?.index, 4);
+
+      final topMid = Offset(
+        (screenVerts[0].dx + screenVerts[1].dx) * 0.5,
+        (screenVerts[0].dy + screenVerts[1].dy) * 0.5,
+      );
+      final mHit = hitTestPolygonHandle(
+        position: topMid,
+        screenVertices: screenVerts,
+      );
+      expect(mHit?.kind, PolygonHitKind.midpoint);
+      expect(mHit?.index, 0);
+
+      final quarterTop = Offset(
+        screenVerts[0].dx + (screenVerts[1].dx - screenVerts[0].dx) * 0.25,
+        screenVerts[0].dy,
+      );
+      final eHit = hitTestPolygonHandle(
+        position: quarterTop,
+        screenVertices: screenVerts,
+      );
+      expect(eHit?.kind, PolygonHitKind.edge);
+      expect(eHit?.index, 0);
+    });
+
+    test(
+        'cropAndEncodeJpg masks excluded neighboring question with seamless exam-paper background tone',
+        () async {
+      final tempDir = Directory.systemTemp.createTempSync('poly_mask_crop_');
+      try {
+        // Build a 300x300 simulated warm-white exam paper (RGB 232, 230, 224)
+        // with:
+        // - Question 3 ink bar in top band (y: 60..90, dark ink RGB 25, 28, 35)
+        // - Question 3 diagram in bottom-right (x: 190..260, y: 150..240, blue diagram RGB 20, 60, 210)
+        // - Distracting Question 4 block in bottom-left (x: 20..140, y: 150..250, bright red RGB 230, 25, 25)
+        final sheet = img.Image(width: 300, height: 300);
+        for (var y = 0; y < 300; y++) {
+          for (var x = 0; x < 300; x++) {
+            if (y >= 60 && y <= 90 && x >= 30 && x <= 270) {
+              sheet.setPixelRgb(x, y, 25, 28, 35);
+            } else if (x >= 190 && x <= 260 && y >= 150 && y <= 240) {
+              sheet.setPixelRgb(x, y, 20, 60, 210);
+            } else if (x >= 20 && x <= 140 && y >= 150 && y <= 250) {
+              sheet.setPixelRgb(x, y, 230, 25, 25);
+            } else {
+              sheet.setPixelRgb(x, y, 232, 230, 224);
+            }
+          }
+        }
+        final file = File('${tempDir.path}/irregular_exam.png')
+          ..writeAsBytesSync(img.encodePng(sheet));
+
+        final decoded = await decodeImageForCrop(file);
+        addTearDown(decoded.dispose);
+
+        // L-shaped polygon enclosing top stem + bottom-right diagram, cutting
+        // out bottom-left Question 4 (x < 0.56, y > 0.42).
+        const lPolygon = <Offset>[
+          Offset(0.05, 0.10),
+          Offset(0.95, 0.10),
+          Offset(0.95, 0.90),
+          Offset(0.56, 0.90),
+          Offset(0.56, 0.42),
+          Offset(0.05, 0.42),
+        ];
+
+        final jpgBytes = await cropAndEncodeJpg(
+          sourceImage: decoded,
+          quarterTurns: 0,
+          normalizedCropRect: computePolygonBounds(lPolygon),
+          normalizedPolygon: lPolygon,
+          jpegQuality: 95,
+        );
+
+        final result = img.decodeJpg(jpgBytes)!;
+        expect(result.width, closeTo(270, 2)); // 0.90 * 300
+        expect(result.height, closeTo(240, 2)); // 0.80 * 300
+
+        // 1. Top stem ink (x=120 -> cropX=105, y=75 -> cropY=45) is preserved:
+        final stemPx = result.getPixel(105, 45);
+        expect(stemPx.r, lessThan(60));
+        expect(stemPx.g, lessThan(60));
+
+        // 2. Right-side diagram (x=225 -> cropX=210, y=195 -> cropY=165) is preserved:
+        final diagPx = result.getPixel(210, 165);
+        expect(diagPx.b, greaterThan(170));
+        expect(diagPx.r, lessThan(60));
+
+        // 3. Excluded bottom-left Question 4 (x=80 -> cropX=65, y=200 -> cropY=170)
+        // is 100% erased to the detected warm-white paper background (~232, 230, 224)!
+        final maskedPx = result.getPixel(65, 170);
+        expect(maskedPx.r, closeTo(232, 8));
+        expect(maskedPx.g, closeTo(230, 8));
+        expect(maskedPx.b, closeTo(224, 8));
       } finally {
         tempDir.deleteSync(recursive: true);
       }

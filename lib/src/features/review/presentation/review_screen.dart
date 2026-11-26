@@ -270,6 +270,8 @@ class _ReviewQuestionList extends StatelessWidget {
                   ref.read(currentQuestionProvider.notifier).state = q;
                   ref.read(questionDetailReturnRouteProvider.notifier).state =
                       '/review';
+                  ref.read(questionDetailModeProvider.notifier).state =
+                      QuestionDetailMode.review;
                   context.go('/notebook/question/${q.id}');
                 },
               ))

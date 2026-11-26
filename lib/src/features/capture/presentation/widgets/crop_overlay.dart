@@ -3,22 +3,33 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:smart_wrong_notebook/src/features/capture/application/free_crop_geometry.dart';
 
-/// Visual overlay for free-form rectangular question selection.
+/// Visual overlay for free-form rectangular and map-style arbitrary polygon
+/// question selection.
 ///
-/// Renders a dimmed surround, 3x3 framing guides, L-shaped corner brackets, and
-/// centered edge drag bars on all four sides so users can immediately tell that
-/// every border can be resized independently without aspect-ratio limits.
+/// In rectangular mode ([polygonVertices] == null), renders a dimmed surround,
+/// 3x3 framing guides, L-shaped corner brackets, and centered edge drag bars.
+/// In polygon mode ([polygonVertices] != null), renders a dimmed surround
+/// outside the arbitrary polygon, crisp polygon edges, circular vertex handles
+/// (`●`), and map-style edge-midpoint `+` handles (`⊕`) for splitting edges.
 class CropOverlay extends StatelessWidget {
   const CropOverlay({
     super.key,
     required this.cropRect,
+    this.polygonVertices,
     this.activeHandle,
+    this.activeVertexIndex,
+    this.selectedVertexIndex,
+    this.activeEdgeIndex,
     this.emphasizeGrid = false,
     this.accentColor = const Color(0xFF818CF8),
   });
 
   final Rect cropRect;
+  final List<Offset>? polygonVertices;
   final CropHandle? activeHandle;
+  final int? activeVertexIndex;
+  final int? selectedVertexIndex;
+  final int? activeEdgeIndex;
   final bool emphasizeGrid;
   final Color accentColor;
 
@@ -27,7 +38,11 @@ class CropOverlay extends StatelessWidget {
     return CustomPaint(
       painter: _CropOverlayPainter(
         cropRect: cropRect,
+        polygonVertices: polygonVertices,
         activeHandle: activeHandle,
+        activeVertexIndex: activeVertexIndex,
+        selectedVertexIndex: selectedVertexIndex,
+        activeEdgeIndex: activeEdgeIndex,
         emphasizeGrid: emphasizeGrid,
         accentColor: accentColor,
       ),
@@ -38,18 +53,32 @@ class CropOverlay extends StatelessWidget {
 class _CropOverlayPainter extends CustomPainter {
   const _CropOverlayPainter({
     required this.cropRect,
+    required this.polygonVertices,
     required this.activeHandle,
+    required this.activeVertexIndex,
+    required this.selectedVertexIndex,
+    required this.activeEdgeIndex,
     required this.emphasizeGrid,
     required this.accentColor,
   });
 
   final Rect cropRect;
+  final List<Offset>? polygonVertices;
   final CropHandle? activeHandle;
+  final int? activeVertexIndex;
+  final int? selectedVertexIndex;
+  final int? activeEdgeIndex;
   final bool emphasizeGrid;
   final Color accentColor;
 
   @override
   void paint(Canvas canvas, Size size) {
+    final poly = polygonVertices;
+    if (poly != null && poly.length >= 3) {
+      _paintPolygonOverlay(canvas, size, poly);
+      return;
+    }
+
     if (cropRect.isEmpty) return;
 
     // Dim everything outside the selected question area using Path difference
@@ -177,6 +206,189 @@ class _CropOverlayPainter extends CustomPainter {
     );
   }
 
+  void _paintPolygonOverlay(Canvas canvas, Size size, List<Offset> poly) {
+    final outerPath = Path()..addRect(Offset.zero & size);
+    final innerPath = Path()
+      ..fillType = PathFillType.evenOdd
+      ..addPolygon(poly, true);
+    final maskPath =
+        Path.combine(PathOperation.difference, outerPath, innerPath);
+    canvas.drawPath(
+      maskPath,
+      Paint()..color = Colors.black.withValues(alpha: 0.64),
+    );
+
+    // Optional leveling grid clipped inside the polygon when adjusting angle.
+    if (emphasizeGrid) {
+      canvas.save();
+      canvas.clipPath(innerPath);
+      final bounds = innerPath.getBounds();
+      final gridPaint = Paint()
+        ..color = Colors.white.withValues(alpha: 0.44)
+        ..strokeWidth = 0.85;
+      const divisions = 6;
+      for (var i = 1; i < divisions; i++) {
+        final dx = bounds.left + bounds.width * i / divisions;
+        canvas.drawLine(
+          Offset(dx, bounds.top),
+          Offset(dx, bounds.bottom),
+          gridPaint,
+        );
+        final dy = bounds.top + bounds.height * i / divisions;
+        canvas.drawLine(
+          Offset(bounds.left, dy),
+          Offset(bounds.right, dy),
+          gridPaint,
+        );
+      }
+      canvas.restore();
+    }
+
+    // Subtle dark outer halo under polygon edges for contrast over white paper.
+    final haloPaint = Paint()
+      ..color = Colors.black.withValues(alpha: 0.45)
+      ..style = PaintingStyle.stroke
+      ..strokeJoin = StrokeJoin.round
+      ..strokeWidth = 3.6;
+    canvas.drawPath(innerPath, haloPaint);
+
+    final isInteracting = activeVertexIndex != null || activeEdgeIndex != null;
+    final edgePaint = Paint()
+      ..color = isInteracting ? accentColor : Colors.white
+      ..style = PaintingStyle.stroke
+      ..strokeJoin = StrokeJoin.round
+      ..strokeWidth = 2.0;
+    canvas.drawPath(innerPath, edgePaint);
+
+    // Highlight active edge segment if user is sliding a whole edge.
+    if (activeEdgeIndex != null &&
+        activeEdgeIndex! >= 0 &&
+        activeEdgeIndex! < poly.length) {
+      final a = poly[activeEdgeIndex!];
+      final b = poly[(activeEdgeIndex! + 1) % poly.length];
+      canvas.drawLine(
+        a,
+        b,
+        Paint()
+          ..color = accentColor
+          ..strokeWidth = 3.2
+          ..strokeCap = StrokeCap.round,
+      );
+    }
+
+    // Map-style midpoint `+` handles for inserting new vertices (clipped to
+    // the visible segment on screen so zoomed-in long edges always show `+`).
+    if (poly.length < kMaxPolygonVertices) {
+      for (var i = 0; i < poly.length; i++) {
+        final a = poly[i];
+        final b = poly[(i + 1) % poly.length];
+        final vis = computeVisibleEdgeMidpoint(
+          a: a,
+          b: b,
+          viewportSize: size,
+          inset: 9.0,
+          minVisibleLength: kMinEdgeLengthForMidpoint,
+        );
+        if (vis == null) continue;
+        _drawMidpointAddHandle(canvas, vis.midpoint);
+      }
+    }
+
+    // Primary circular vertex handles (`●`).
+    for (var i = 0; i < poly.length; i++) {
+      final center = _clampHandleToCanvas(poly[i], size, inset: 10.0);
+      final isActive = i == activeVertexIndex;
+      final isSelected = i == selectedVertexIndex;
+      _drawPolygonVertex(
+        canvas,
+        center: center,
+        active: isActive,
+        selected: isSelected,
+      );
+    }
+  }
+
+  Offset _clampHandleToCanvas(Offset pt, Size size, {required double inset}) {
+    final maxX = math.max(inset, size.width - inset);
+    final maxY = math.max(inset, size.height - inset);
+    // Only inset-clamp vertices sitting right on [0..size] edges; let panned
+    // off-screen vertices scroll cleanly outside the viewport.
+    if (pt.dx < -1.0 ||
+        pt.dx > size.width + 1.0 ||
+        pt.dy < -1.0 ||
+        pt.dy > size.height + 1.0) {
+      return pt;
+    }
+    return Offset(
+      pt.dx.clamp(inset, maxX),
+      pt.dy.clamp(inset, maxY),
+    );
+  }
+
+  void _drawMidpointAddHandle(Canvas canvas, Offset center) {
+    const radius = 8.2;
+    canvas.drawCircle(
+      center,
+      radius + 1.2,
+      Paint()..color = Colors.black.withValues(alpha: 0.42),
+    );
+    canvas.drawCircle(
+      center,
+      radius,
+      Paint()..color = const Color(0xEB1E2433),
+    );
+    canvas.drawCircle(
+      center,
+      radius,
+      Paint()
+        ..color = Colors.white.withValues(alpha: 0.88)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.4,
+    );
+    const arm = 3.6;
+    final plusPaint = Paint()
+      ..color = Colors.white
+      ..strokeWidth = 1.5
+      ..strokeCap = StrokeCap.round;
+    canvas.drawLine(
+      Offset(center.dx - arm, center.dy),
+      Offset(center.dx + arm, center.dy),
+      plusPaint,
+    );
+    canvas.drawLine(
+      Offset(center.dx, center.dy - arm),
+      Offset(center.dx, center.dy + arm),
+      plusPaint,
+    );
+  }
+
+  void _drawPolygonVertex(
+    Canvas canvas, {
+    required Offset center,
+    required bool active,
+    required bool selected,
+  }) {
+    final outerRadius = active ? 11.5 : (selected ? 10.5 : 9.2);
+    final innerRadius = active ? 6.2 : (selected ? 5.6 : 4.6);
+
+    canvas.drawCircle(
+      center,
+      outerRadius + 1.6,
+      Paint()..color = Colors.black.withValues(alpha: 0.45),
+    );
+    canvas.drawCircle(
+      center,
+      outerRadius,
+      Paint()..color = Colors.white,
+    );
+    canvas.drawCircle(
+      center,
+      innerRadius,
+      Paint()
+        ..color = (active || selected) ? const Color(0xFFF59E0B) : accentColor,
+    );
+  }
+
   void _drawCorner(
     Canvas canvas, {
     required Offset corner,
@@ -229,7 +441,11 @@ class _CropOverlayPainter extends CustomPainter {
   @override
   bool shouldRepaint(_CropOverlayPainter oldDelegate) {
     return oldDelegate.cropRect != cropRect ||
+        oldDelegate.polygonVertices != polygonVertices ||
         oldDelegate.activeHandle != activeHandle ||
+        oldDelegate.activeVertexIndex != activeVertexIndex ||
+        oldDelegate.selectedVertexIndex != selectedVertexIndex ||
+        oldDelegate.activeEdgeIndex != activeEdgeIndex ||
         oldDelegate.emphasizeGrid != emphasizeGrid ||
         oldDelegate.accentColor != accentColor;
   }

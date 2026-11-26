@@ -106,6 +106,8 @@ class ReviewHistoryScreen extends ConsumerWidget {
                     entry.question;
                 ref.read(questionDetailReturnRouteProvider.notifier).state =
                     '/review/history';
+                ref.read(questionDetailModeProvider.notifier).state =
+                    QuestionDetailMode.browse;
                 context.go('/notebook/question/${entry.question!.id}');
               }
             : null,

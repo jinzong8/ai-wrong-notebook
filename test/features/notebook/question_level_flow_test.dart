@@ -10,6 +10,7 @@ import 'package:smart_wrong_notebook/src/data/repositories/drift_analysis_job_re
 import 'package:smart_wrong_notebook/src/data/repositories/question_repository.dart';
 import 'package:smart_wrong_notebook/src/data/repositories/settings_repository.dart';
 import 'package:smart_wrong_notebook/src/domain/models/ai_conversation_message.dart';
+import 'package:smart_wrong_notebook/src/domain/models/ai_provider_config.dart';
 import 'package:smart_wrong_notebook/src/domain/models/ai_task_spec.dart';
 import 'package:smart_wrong_notebook/src/domain/models/analysis_result.dart';
 import 'package:smart_wrong_notebook/src/domain/models/analysis_job.dart';
@@ -19,6 +20,7 @@ import 'package:smart_wrong_notebook/src/domain/models/mastery_level.dart';
 import 'package:smart_wrong_notebook/src/domain/models/question_record.dart';
 import 'package:smart_wrong_notebook/src/domain/models/subject.dart';
 import 'package:smart_wrong_notebook/src/domain/repositories/ai_conversation_repository.dart';
+import 'package:smart_wrong_notebook/src/domain/repositories/review_log_repository.dart';
 import 'package:smart_wrong_notebook/src/domain/services/ai_route_resolver.dart';
 import 'package:smart_wrong_notebook/src/features/analysis/presentation/exercise_practice_screen.dart';
 import 'package:smart_wrong_notebook/src/features/notebook/presentation/notebook_screen.dart';
@@ -470,8 +472,6 @@ void main() {
 
     expect(find.text('举一反三'), findsOneWidget);
     expect(find.text('生成举一反三'), findsOneWidget);
-    expect(find.text('生成练习不会影响原题解析。'), findsOneWidget);
-    expect(find.text('根据这道错题的题干、知识点和解析生成练习；宁可少生成，也不展示低质量练习。'), findsOneWidget);
     expect(find.text('暂无练习'), findsNothing);
     expect(find.text('暂无可练习内容'), findsNothing);
 
@@ -503,6 +503,11 @@ void main() {
     final saved = await repository.getById(question.id);
     expect(saved?.savedExercises, hasLength(3));
 
+    ScaffoldMessenger.of(tester.element(find.byType(QuestionDetailScreen)))
+        .hideCurrentSnackBar();
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('继续练习'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('继续练习'));
     await tester.pumpAndSettle();
 
@@ -967,5 +972,196 @@ void main() {
 
     expect(find.text('举一反三 1/1'), findsOneWidget);
     expect(find.text('练习题1'), findsOneWidget);
+  });
+
+  testWidgets(
+      'question detail in capture mode offers continuous next-question capture and clean reading order',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(430, 1200));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    final repository = InMemoryQuestionRepository();
+    final settingsRepository = InMemorySettingsRepository();
+    await settingsRepository.saveAiProviderConfig(
+      const AiProviderConfig(
+        id: 'test',
+        displayName: 'Test',
+        baseUrl: 'https://api.test.com',
+        model: 'test-model',
+        apiKey: 'test-key',
+      ),
+    );
+    final question = _buildSavedSplitQuestion();
+    await repository.saveDraft(question);
+
+    final container = ProviderContainer(
+      overrides: <Override>[
+        questionRepositoryProvider.overrideWithValue(repository),
+        settingsRepositoryProvider.overrideWithValue(settingsRepository),
+        currentQuestionProvider.overrideWith((ref) => question),
+      ],
+    );
+    addTearDown(container.dispose);
+    container.read(questionDetailReturnRouteProvider.notifier).state = '/';
+    container.read(questionDetailModeProvider.notifier).state =
+        QuestionDetailMode.capture;
+
+    final router = GoRouter(
+      initialLocation: '/notebook/question/${question.id}',
+      routes: <GoRoute>[
+        GoRoute(
+          path: '/',
+          builder: (_, __) => const Scaffold(body: Text('HOME_SCREEN')),
+        ),
+        GoRoute(
+          path: '/capture/camera',
+          builder: (_, __) => const Scaffold(body: Text('CAMERA_SCREEN')),
+        ),
+        GoRoute(
+          path: '/notebook/question/:id',
+          builder: (_, __) => const QuestionDetailScreen(),
+        ),
+      ],
+    );
+    addTearDown(router.dispose);
+
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: container,
+      child: MaterialApp.router(routerConfig: router),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('detail-capture-next')), findsOneWidget);
+    expect(find.text('继续拍下一题'), findsOneWidget);
+    expect(find.byKey(const Key('detail-finish-capture')), findsOneWidget);
+    expect(find.text('完成'), findsOneWidget);
+    expect(find.byKey(const Key('detail-add-tag-chip')), findsOneWidget);
+
+    expect(find.text('仍需复习'), findsNothing);
+    expect(find.text('已掌握'), findsNothing);
+    expect(find.text('AI识别'), findsNothing);
+    expect(find.byTooltip('编辑题目'), findsNothing);
+
+    final answerY = tester.getTopLeft(find.text('正确答案')).dy;
+    final stepsY = tester.getTopLeft(find.text('解题步骤')).dy;
+    final mistakeY = tester.getTopLeft(find.text('错因分析')).dy;
+    expect(answerY, lessThan(stepsY));
+    expect(stepsY, lessThan(mistakeY));
+
+    await tester.tap(find.byKey(const Key('detail-capture-next')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('CAMERA_SCREEN'), findsOneWidget);
+    expect(container.read(captureReturnRouteProvider), '/');
+  });
+
+  testWidgets(
+      'question detail in review mode shows mastery bottom bar and returns to review',
+      (tester) async {
+    final repository = InMemoryQuestionRepository();
+    final reviewLogs = InMemoryReviewLogRepository();
+    final question = _buildSavedSplitQuestion();
+    await repository.saveDraft(question);
+
+    final container = ProviderContainer(
+      overrides: <Override>[
+        questionRepositoryProvider.overrideWithValue(repository),
+        reviewLogRepositoryProvider.overrideWithValue(reviewLogs),
+        currentQuestionProvider.overrideWith((ref) => question),
+      ],
+    );
+    addTearDown(container.dispose);
+    container.read(questionDetailReturnRouteProvider.notifier).state =
+        '/review';
+    container.read(questionDetailModeProvider.notifier).state =
+        QuestionDetailMode.review;
+
+    final router = GoRouter(
+      initialLocation: '/notebook/question/${question.id}',
+      routes: <GoRoute>[
+        GoRoute(
+          path: '/review',
+          builder: (_, __) => const Scaffold(body: Text('REVIEW_SCREEN')),
+        ),
+        GoRoute(
+          path: '/notebook/question/:id',
+          builder: (_, __) => const QuestionDetailScreen(),
+        ),
+      ],
+    );
+    addTearDown(router.dispose);
+
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: container,
+      child: MaterialApp.router(routerConfig: router),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.text('继续拍下一题'), findsNothing);
+    expect(find.byKey(const Key('detail-mark-reviewing')), findsOneWidget);
+    expect(find.byKey(const Key('detail-mark-mastered')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('detail-mark-mastered')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('REVIEW_SCREEN'), findsOneWidget);
+    final updated = await repository.getById(question.id);
+    expect(updated?.masteryLevel, MasteryLevel.mastered);
+  });
+
+  testWidgets(
+      'question detail in browse mode hides bottom bar and toggles mastery inline',
+      (tester) async {
+    final repository = InMemoryQuestionRepository();
+    final reviewLogs = InMemoryReviewLogRepository();
+    final question = _buildSavedSplitQuestion();
+    await repository.saveDraft(question);
+
+    final container = ProviderContainer(
+      overrides: <Override>[
+        questionRepositoryProvider.overrideWithValue(repository),
+        reviewLogRepositoryProvider.overrideWithValue(reviewLogs),
+        currentQuestionProvider.overrideWith((ref) => question),
+      ],
+    );
+    addTearDown(container.dispose);
+    container.read(questionDetailModeProvider.notifier).state =
+        QuestionDetailMode.browse;
+
+    final router = GoRouter(
+      initialLocation: '/notebook/question/${question.id}',
+      routes: <GoRoute>[
+        GoRoute(
+          path: '/notebook/question/:id',
+          builder: (_, __) => const QuestionDetailScreen(),
+        ),
+      ],
+    );
+    addTearDown(router.dispose);
+
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: container,
+      child: MaterialApp.router(routerConfig: router),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.text('继续拍下一题'), findsNothing);
+    expect(find.byKey(const Key('detail-mark-mastered')), findsNothing);
+
+    final toggleFinder = find.byKey(const Key('detail-browse-toggle-mastery'));
+    await tester.scrollUntilVisible(
+      toggleFinder,
+      220,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('标记为已掌握'), findsOneWidget);
+    await tester.tap(toggleFinder);
+    await tester.pumpAndSettle();
+
+    expect(find.text('恢复为待复习'), findsOneWidget);
+    final updated = await repository.getById(question.id);
+    expect(updated?.masteryLevel, MasteryLevel.mastered);
   });
 }
